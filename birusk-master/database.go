@@ -46,6 +46,11 @@ func InitDB(filepath string) {
 		last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
 		PRIMARY KEY (user_id, node_id)
 	);
+
+	CREATE TABLE IF NOT EXISTS settings (
+		key TEXT PRIMARY KEY,
+		value TEXT NOT NULL
+	);
 	`
 	_, err = DB.Exec(createTables)
 	if err != nil {
@@ -55,11 +60,27 @@ func InitDB(filepath string) {
 	// آپدیت خودکار دیتابیس‌های قدیمی بدون پاک شدن اطلاعات قبلی کاربران و نودها
 	DB.Exec("ALTER TABLE users ADD COLUMN expire_time INTEGER DEFAULT 0;")
 	DB.Exec("ALTER TABLE nodes ADD COLUMN clean_ip TEXT DEFAULT '';")
-	
-	// آپدیت‌های جدید برای نسخه Enterprise (پروتکل‌ها و نام اختصاصی کانفیگ)
 	DB.Exec("ALTER TABLE users ADD COLUMN vless_enabled INTEGER DEFAULT 1;")
 	DB.Exec("ALTER TABLE users ADD COLUMN trojan_enabled INTEGER DEFAULT 1;")
 	DB.Exec("ALTER TABLE users ADD COLUMN custom_remark TEXT DEFAULT '';")
+
+	// مقداردهی اولیه تنظیمات پیش‌فرض در صورت عدم وجود
+	initDefaultSettings()
+}
+
+func initDefaultSettings() {
+	defaults := map[string]string{
+		"sub_domain":       "",
+		"default_clean_ip": "",
+		"mtproto_enabled":  "0",
+		"mtproto_port":     "8443",
+		"mtproto_secret":   "",
+		"mtproto_tag":      "",
+	}
+
+	for k, v := range defaults {
+		_, _ = DB.Exec("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", k, v)
+	}
 }
 
 func RecordUsage(userID string, nodeID string, bytes int64) error {

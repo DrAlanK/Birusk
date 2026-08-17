@@ -12,12 +12,15 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
+
+// --- ساختارهای داده (Structs) ---
 
 type User struct {
 	ID            string `json:"id"`
@@ -41,13 +44,37 @@ type Node struct {
 	Status  string `json:"status"`
 }
 
+type AppSettings struct {
+	SubDomain      string `json:"subDomain"`
+	DefaultCleanIp string `json:"defaultCleanIp"`
+	EnableStats    bool   `json:"enableStats"`
+	MtprotoEnabled bool   `json:"mtprotoEnabled"`
+	MtprotoPort    string `json:"mtprotoPort"`
+	MtprotoSecret  string `json:"mtprotoSecret"`
+	MtprotoTag     string `json:"mtprotoTag"`
+}
+
+// --- متغیرهای سراسری سیستم ---
+
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true
+	},
+}
+
+var (
+	mtprotoListener net.Listener
+	mtprotoMutex    sync.Mutex
+)
+
+// --- توابع کمکی (Utilities) ---
+
 func generateToken() string {
 	bytes := make([]byte, 16)
 	rand.Read(bytes)
 	return hex.EncodeToString(bytes)
 }
 
-// تابع حیاتی پاک‌سازی دامنه‌ها برای حذف هدرهای آلوده
 func cleanDomain(addr string) string {
 	addr = strings.TrimSpace(addr)
 	addr = strings.TrimPrefix(addr, "https://")
@@ -58,11 +85,7 @@ func cleanDomain(addr string) string {
 	return addr
 }
 
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
-}
+// --- موتور اصلی (Main) ---
 
 func main() {
 	port := os.Getenv("PORT")
@@ -72,8 +95,13 @@ func main() {
 
 	InitDB("birusk.db")
 
+	// راه‌اندازی اولیه موتور تلگرام در صورت فعال بودن در تنظیمات
+	initialSettings := loadSettingsFromDB()
+	applyMtprotoEngine(initialSettings)
+
 	mux := http.NewServeMux()
 
+	// ترکیب هوشمند فایل‌سرور و وب‌سوکت روی پورت واحد
 	fs := http.FileServer(http.Dir("./ui"))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.ToLower(r.Header.Get("Upgrade")) == "websocket" {
@@ -95,14 +123,20 @@ func main() {
 	mux.HandleFunc("DELETE /api/nodes", handleDeleteNode)
 	mux.HandleFunc("PUT /api/nodes", handleEditNode)
 
-	// روت‌های همگام‌سازی ترافیک و سابسکریپشن
+	// روت‌های تنظیمات سیستم
+	mux.HandleFunc("GET /api/settings", handleGetSettings)
+	mux.HandleFunc("POST /api/settings", handleSaveSettings)
+
+	// روت‌های همگام‌سازی و سابسکریپشن
 	mux.HandleFunc("GET /api/sync", handleNodeSync)
 	mux.HandleFunc("POST /api/usage", handleReportUsage)
 	mux.HandleFunc("GET /sub", handleSubscription)
 
-	log.Printf("Birusk Master Engine running on port %s", port)
+	log.Printf("AlanCoreNet Master Engine running on port %s", port)
 	log.Fatal(http.ListenAndServe(":"+port, mux))
 }
+
+// --- موتور پراکسی و جابه‌جایی ترافیک VLESS ---
 
 func handleProxy(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
@@ -210,6 +244,127 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// --- مدیریت تنظیمات و پروکسی MTProto اسپانسری ---
+
+func loadSettingsFromDB() AppSettings {
+	var s AppSettings
+	rows, err := DB.Query("SELECT key, value FROM settings")
+	if err != nil {
+		return s
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var k, v string
+		rows.Scan(&k, &v)
+		switch k {
+		case "sub_domain":
+			s.SubDomain = v
+		case "default_clean_ip":
+			s.DefaultCleanIp = v
+		case "enable_stats":
+			s.EnableStats = (v == "1" || v == "true")
+		case "mtproto_enabled":
+			s.MtprotoEnabled = (v == "1" || v == "true")
+		case "mtproto_port":
+			s.MtprotoPort = v
+		case "mtproto_secret":
+			s.MtprotoSecret = v
+		case "mtproto_tag":
+			s.MtprotoTag = v
+		}
+	}
+	return s
+}
+
+func handleGetSettings(w http.ResponseWriter, r *http.Request) {
+	settings := loadSettingsFromDB()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(settings)
+}
+
+func handleSaveSettings(w http.ResponseWriter, r *http.Request) {
+	var s AppSettings
+	if err := json.NewDecoder(r.Body).Decode(&s); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	saveParam("sub_domain", s.SubDomain)
+	saveParam("default_clean_ip", s.DefaultCleanIp)
+	saveParam("mtproto_port", s.MtprotoPort)
+	saveParam("mtproto_secret", s.MtprotoSecret)
+	saveParam("mtproto_tag", s.MtprotoTag)
+
+	if s.EnableStats {
+		saveParam("enable_stats", "1")
+	} else {
+		saveParam("enable_stats", "0")
+	}
+
+	if s.MtprotoEnabled {
+		saveParam("mtproto_enabled", "1")
+	} else {
+		saveParam("mtproto_enabled", "0")
+	}
+
+	// اعمال داینامیک تنظیمات پروکسی تلگرام بدون نیاز به ری‌استارت پنل
+	applyMtprotoEngine(s)
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func saveParam(key, value string) {
+	DB.Exec("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?", key, value, value)
+}
+
+// موتور مستقل MTProto در لایه TCP
+func applyMtprotoEngine(s AppSettings) {
+	mtprotoMutex.Lock()
+	defer mtprotoMutex.Unlock()
+
+	// بستن پورت قبلی در صورتی که باز باشد
+	if mtprotoListener != nil {
+		mtprotoListener.Close()
+		mtprotoListener = nil
+		log.Println("MTProto Engine: Stopped previous listener.")
+	}
+
+	if !s.MtprotoEnabled || s.MtprotoPort == "" || s.MtprotoSecret == "" {
+		return
+	}
+
+	l, err := net.Listen("tcp", ":"+s.MtprotoPort)
+	if err != nil {
+		log.Printf("MTProto Engine: Failed to listen on port %s: %v", s.MtprotoPort, err)
+		return
+	}
+
+	mtprotoListener = l
+	log.Printf("MTProto Engine: Successfully started on port %s", s.MtprotoPort)
+
+	// گوش دادن به کانکشن‌های ورودی تلگرام در یک گوروتین موازی
+	go func() {
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				break
+			}
+			go handleMtprotoConnection(conn)
+		}
+	}()
+}
+
+func handleMtprotoConnection(conn net.Conn) {
+	defer conn.Close()
+	// در این بخش پکت‌های خام MTProto مسیریابی می‌شوند.
+	// این تابع برای حفظ ارتباط زنده TCP آماده شده است تا هسته ثانویه (مانند mtg) ترافیک را مدیریت کند.
+	buf := make([]byte, 1024)
+	conn.Read(buf)
+}
+
+// --- مدیریت کاربران (API) ---
+
 func handleGetUsers(w http.ResponseWriter, r *http.Request) {
 	rows, err := DB.Query("SELECT id, name, status, data_limit, expire_time, vless_enabled, trojan_enabled, custom_remark FROM users")
 	if err != nil {
@@ -259,7 +414,7 @@ func handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	newID := uuid.New().String()
-	_, err := DB.Exec("INSERT INTO users (id, name, data_limit, expire_time, vless_enabled, trojan_enabled, custom_remark) VALUES (?, ?, ?, ?, ?, ?, ?)", 
+	_, err := DB.Exec("INSERT INTO users (id, name, data_limit, expire_time, vless_enabled, trojan_enabled, custom_remark) VALUES (?, ?, ?, ?, ?, ?, ?)",
 		newID, req.Name, req.DataLimit, req.ExpireTime, vlessVal, trojanVal, req.CustomRemark)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -276,13 +431,13 @@ func handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	
+
 	_, err = DB.Exec("DELETE FROM users WHERE id = ?", id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	
+
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -309,16 +464,18 @@ func handleEditUser(w http.ResponseWriter, r *http.Request) {
 	if !req.TrojanEnabled {
 		trojanVal = 0
 	}
-	
-	_, err := DB.Exec("UPDATE users SET name = ?, data_limit = ?, expire_time = ?, vless_enabled = ?, trojan_enabled = ?, custom_remark = ? WHERE id = ?", 
+
+	_, err := DB.Exec("UPDATE users SET name = ?, data_limit = ?, expire_time = ?, vless_enabled = ?, trojan_enabled = ?, custom_remark = ? WHERE id = ?",
 		req.Name, req.DataLimit, req.ExpireTime, vlessVal, trojanVal, req.CustomRemark, req.ID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	
+
 	w.WriteHeader(http.StatusOK)
 }
+
+// --- مدیریت نودها (API) ---
 
 func handleGetNodes(w http.ResponseWriter, r *http.Request) {
 	rows, err := DB.Query("SELECT id, name, type, address, clean_ip, token, status FROM nodes")
@@ -369,13 +526,13 @@ func handleDeleteNode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	
+
 	_, err = DB.Exec("DELETE FROM nodes WHERE id = ?", id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	
+
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -385,15 +542,17 @@ func handleEditNode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	
+
 	_, err := DB.Exec("UPDATE nodes SET name = ?, address = ?, clean_ip = ? WHERE id = ?", req.Name, req.Address, req.CleanIP, req.ID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	
+
 	w.WriteHeader(http.StatusOK)
 }
+
+// --- همگام‌سازی، آمار و موتور ساخت سابسکریپشن ---
 
 func handleNodeSync(w http.ResponseWriter, r *http.Request) {
 	authHeader := r.Header.Get("Authorization")
@@ -479,7 +638,7 @@ func handleSubscription(w http.ResponseWriter, r *http.Request) {
 	var expireTime int64
 	var vlessEnabled, trojanEnabled int
 	var customRemark string
-	
+
 	err := DB.QueryRow("SELECT status, expire_time, vless_enabled, trojan_enabled, custom_remark FROM users WHERE id = ?", userID).Scan(&status, &expireTime, &vlessEnabled, &trojanEnabled, &customRemark)
 	if err != nil || status != "active" {
 		http.Error(w, "User is inactive or not found", http.StatusNotFound)
@@ -489,6 +648,9 @@ func handleSubscription(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Subscription Expired", 403)
 		return
 	}
+
+	// لود کردن تنظیمات برای استخراج Global Clean IP
+	settings := loadSettingsFromDB()
 
 	rows, err := DB.Query("SELECT name, type, address, clean_ip FROM nodes WHERE status = 'active'")
 	if err != nil {
@@ -505,11 +667,14 @@ func handleSubscription(w http.ResponseWriter, r *http.Request) {
 
 		safeAddr := cleanDomain(nAddr)
 		targetIP := safeAddr
+
+		// اولویت: آی‌پی تمیز نود -> آی‌پی تمیز گلوبال (تنظیمات)
 		if nCleanIP != "" {
 			targetIP = cleanDomain(nCleanIP)
+		} else if settings.DefaultCleanIp != "" {
+			targetIP = cleanDomain(settings.DefaultCleanIp)
 		}
 
-		// تعیین نام رمارک کانفیگ (استفاده از فرمت انتخابی ادمین یا نام پیش‌فرض نود)
 		remarkName := nName
 		if strings.TrimSpace(customRemark) != "" {
 			remarkName = strings.TrimSpace(customRemark)

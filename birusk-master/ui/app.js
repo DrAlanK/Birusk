@@ -11,11 +11,15 @@ document.addEventListener('DOMContentLoaded', () => {
     let usersData = [];
     let nodesData = [];
     
-    // ذخیره تنظیمات در لوکال استوریج تا زمانی که دیتابیس بک‌اند رو برای تنظیمات آپدیت کنیم
+    // ذخیره تنظیمات در لوکال استوریج (شامل تنظیمات MTProto تلگرام)
     let coreSettings = JSON.parse(localStorage.getItem('birusk_settings')) || {
         subDomain: '',
         defaultCleanIp: '',
-        enableStats: true
+        enableStats: true,
+        mtprotoEnabled: false,
+        mtprotoPort: '8443',
+        mtprotoSecret: '',
+        mtprotoTag: ''
     };
 
     // --- مدیریت تم (تاریک/روشن) ---
@@ -132,7 +136,6 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             document.getElementById('form-user-days').value = daysLeft;
             
-            // بازیابی تیک‌های پروتکل و کاستوم رمارک از دیتابیس
             document.getElementById('form-user-vless').checked = (u.vless_enabled !== 0);
             document.getElementById('form-user-trojan').checked = (u.trojan_enabled !== 0);
             document.getElementById('form-user-remark').value = u.custom_remark || '';
@@ -267,11 +270,25 @@ document.addEventListener('DOMContentLoaded', () => {
         coreSettings.defaultCleanIp = document.getElementById('setting-cleanip').value;
         coreSettings.enableStats = document.getElementById('setting-stats').checked;
         
+        // ذخیره تنظیمات تلگرام پروکسی
+        coreSettings.mtprotoEnabled = document.getElementById('setting-mtproto-enable').checked;
+        coreSettings.mtprotoPort = document.getElementById('setting-mtproto-port').value;
+        coreSettings.mtprotoSecret = document.getElementById('setting-mtproto-secret').value;
+        coreSettings.mtprotoTag = document.getElementById('setting-mtproto-tag').value;
+        
         localStorage.setItem('birusk_settings', JSON.stringify(coreSettings));
         
         const btn = document.getElementById('btn-save-settings');
         btn.innerText = 'Saved Successfully! ✔️';
         btn.style.background = 'var(--success)';
+        
+        // فراخوانی API برای آپدیت تنظیمات در بک‌اند (در فاز بعدی main.go این روت را می‌سازیم)
+        fetch('/api/settings', { 
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' }, 
+            body: JSON.stringify(coreSettings) 
+        }).catch(e => console.log("Settings API will be ready after backend update."));
+
         setTimeout(() => {
             btn.innerText = 'Save Core Configurations';
             btn.style.background = 'var(--primary)';
@@ -354,6 +371,15 @@ document.addEventListener('DOMContentLoaded', () => {
                                     window.location.origin;
                                     
                                 const subLink = `${subBaseUrl}/sub?id=${u.id}`;
+                                
+                                // منطق ساخت لینک داینامیک تلگرام پروکسی
+                                let tgBtnHtml = '';
+                                if (coreSettings.mtprotoEnabled && coreSettings.mtprotoPort && coreSettings.mtprotoSecret) {
+                                    let tgServer = coreSettings.subDomain || window.location.hostname;
+                                    tgServer = tgServer.replace(/^https?:\/\//, '').split('/')[0];
+                                    let tgLink = `tg://proxy?server=${tgServer}&port=${coreSettings.mtprotoPort}&secret=${coreSettings.mtprotoSecret}`;
+                                    tgBtnHtml = `<button onclick="copyText('${tgLink}', 'Telegram Proxy Link Copied!')" class="btn-telegram" style="padding:8px 12px; font-size:0.85rem; border-radius:8px;">✈️ TG Proxy</button>`;
+                                }
 
                                 return `
                                 <tr>
@@ -378,7 +404,8 @@ document.addEventListener('DOMContentLoaded', () => {
                                     </td>
                                     <td>
                                         <div style="display:flex; gap:8px;">
-                                            <button onclick="copyText('${subLink}', 'Subscription Link Copied!')" style="padding:8px 12px; font-size:0.85rem; border-radius:8px;">🔗 Copy Sub</button>
+                                            ${tgBtnHtml}
+                                            <button onclick="copyText('${subLink}', 'Subscription Link Copied!')" style="padding:8px 12px; font-size:0.85rem; border-radius:8px;">🔗 Sub</button>
                                             <button onclick="openUserWizard('${u.id}')" style="padding:8px 12px; background:var(--bg-card); color:var(--primary); border:1px solid var(--primary); font-size:0.85rem; border-radius:8px;">⚙️ Manage</button>
                                             <button onclick="deleteUser('${u.id}')" class="btn-danger" style="padding:8px 12px; font-size:0.85rem; border-radius:8px;">🗑</button>
                                         </div>
@@ -455,7 +482,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             <input type="text" id="setting-cleanip" placeholder="e.g. 104.17.142.23" value="${coreSettings.defaultCleanIp || ''}">
                         </div>
 
-                        <div class="switch-group" style="margin-bottom: 30px;">
+                        <div class="switch-group" style="margin-bottom: 10px;">
                             <div>
                                 <div style="font-weight: 600;">Live Statistics Engine</div>
                                 <div style="font-size: 0.8rem; color: var(--text-muted);">Enable real-time dashboard analytics and traffic visualization</div>
@@ -464,6 +491,35 @@ document.addEventListener('DOMContentLoaded', () => {
                                 <input type="checkbox" id="setting-stats" ${coreSettings.enableStats ? 'checked' : ''}>
                                 <span class="slider"></span>
                             </label>
+                        </div>
+                        
+                        <h3 style="margin-top: 32px; margin-bottom: 16px; color: var(--telegram); border-bottom: 1px solid var(--border); padding-bottom: 12px;">Telegram MTProto Proxy</h3>
+                        
+                        <div class="switch-group" style="margin-bottom: 20px;">
+                            <div>
+                                <div style="font-weight: 600;">Enable Telegram Proxy</div>
+                                <div style="font-size: 0.8rem; color: var(--text-muted);">Activate MTProto engine with Sponsor Channel</div>
+                            </div>
+                            <label class="switch">
+                                <input type="checkbox" id="setting-mtproto-enable" ${coreSettings.mtprotoEnabled ? 'checked' : ''}>
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                        
+                        <div class="form-row" style="margin-bottom: 20px;">
+                            <div class="form-group">
+                                <label style="font-weight:bold; margin-bottom:8px;">Proxy Port</label>
+                                <input type="number" id="setting-mtproto-port" placeholder="e.g. 8443" value="${coreSettings.mtprotoPort || '8443'}">
+                            </div>
+                            <div class="form-group">
+                                <label style="font-weight:bold; margin-bottom:8px;">Proxy Tag (from Bot)</label>
+                                <input type="text" id="setting-mtproto-tag" placeholder="e.g. a7b8c9d0..." value="${coreSettings.mtprotoTag || ''}">
+                            </div>
+                        </div>
+                        
+                        <div class="form-group" style="margin-bottom: 30px;">
+                            <label style="font-weight:bold; margin-bottom:8px;">MTProto Secret (Starts with 'dd')</label>
+                            <input type="text" id="setting-mtproto-secret" placeholder="e.g. ddea1234567890abcdef..." value="${coreSettings.mtprotoSecret || ''}">
                         </div>
 
                         <button id="btn-save-settings" onclick="saveSettings()" style="width:100%; font-size:1.1rem; padding:16px;">Save Core Configurations</button>
