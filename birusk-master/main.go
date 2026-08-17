@@ -20,12 +20,15 @@ import (
 )
 
 type User struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	Status     string `json:"status"`
-	DataLimit  int64  `json:"data_limit"`
-	ExpireTime int64  `json:"expire_time"`
-	UsedData   int64  `json:"used_data"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Status        string `json:"status"`
+	DataLimit     int64  `json:"data_limit"`
+	ExpireTime    int64  `json:"expire_time"`
+	VlessEnabled  int    `json:"vless_enabled"`
+	TrojanEnabled int    `json:"trojan_enabled"`
+	CustomRemark  string `json:"custom_remark"`
+	UsedData      int64  `json:"used_data"`
 }
 
 type Node struct {
@@ -44,6 +47,17 @@ func generateToken() string {
 	return hex.EncodeToString(bytes)
 }
 
+// تابع حیاتی پاک‌سازی دامنه‌ها برای حذف هدرهای آلوده
+func cleanDomain(addr string) string {
+	addr = strings.TrimSpace(addr)
+	addr = strings.TrimPrefix(addr, "https://")
+	addr = strings.TrimPrefix(addr, "http://")
+	if idx := strings.Index(addr, "/"); idx != -1 {
+		addr = addr[:idx]
+	}
+	return addr
+}
+
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		return true
@@ -60,7 +74,6 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// ترکیب هوشمندانه: اگر درخواست از نوع WebSocket بود میره برای عبور ترافیک، در غیر این صورت پنل باز میشه
 	fs := http.FileServer(http.Dir("./ui"))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.ToLower(r.Header.Get("Upgrade")) == "websocket" {
@@ -82,7 +95,7 @@ func main() {
 	mux.HandleFunc("DELETE /api/nodes", handleDeleteNode)
 	mux.HandleFunc("PUT /api/nodes", handleEditNode)
 
-	// روت‌های ارتباطی با کلادفلر و کلاینت‌ها
+	// روت‌های همگام‌سازی ترافیک و سابسکریپشن
 	mux.HandleFunc("GET /api/sync", handleNodeSync)
 	mux.HandleFunc("POST /api/usage", handleReportUsage)
 	mux.HandleFunc("GET /sub", handleSubscription)
@@ -91,7 +104,6 @@ func main() {
 	log.Fatal(http.ListenAndServe(":"+port, mux))
 }
 
-// موتور پردازشگر ترافیک VLESS اختصاصی ریلوی
 func handleProxy(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -111,7 +123,6 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := parsedUUID.String()
 
-	// بررسی وضعیت و تاریخ انقضای کاربر
 	var status string
 	var expireTime int64
 	err = DB.QueryRow("SELECT status, expire_time FROM users WHERE id = ?", userID).Scan(&status, &expireTime)
@@ -200,7 +211,7 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleGetUsers(w http.ResponseWriter, r *http.Request) {
-	rows, err := DB.Query("SELECT id, name, status, data_limit, expire_time FROM users")
+	rows, err := DB.Query("SELECT id, name, status, data_limit, expire_time, vless_enabled, trojan_enabled, custom_remark FROM users")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -210,7 +221,7 @@ func handleGetUsers(w http.ResponseWriter, r *http.Request) {
 	var userList []User
 	for rows.Next() {
 		var u User
-		rows.Scan(&u.ID, &u.Name, &u.Status, &u.DataLimit, &u.ExpireTime)
+		rows.Scan(&u.ID, &u.Name, &u.Status, &u.DataLimit, &u.ExpireTime, &u.VlessEnabled, &u.TrojanEnabled, &u.CustomRemark)
 		usage, _ := GetTotalUsage(u.ID)
 		u.UsedData = usage
 		userList = append(userList, u)
@@ -226,17 +237,30 @@ func handleGetUsers(w http.ResponseWriter, r *http.Request) {
 
 func handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name       string `json:"name"`
-		DataLimit  int64  `json:"data_limit"`
-		ExpireTime int64  `json:"expire_time"`
+		Name          string `json:"name"`
+		DataLimit     int64  `json:"data_limit"`
+		ExpireTime    int64  `json:"expire_time"`
+		VlessEnabled  bool   `json:"vless_enabled"`
+		TrojanEnabled bool   `json:"trojan_enabled"`
+		CustomRemark  string `json:"custom_remark"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
+	vlessVal := 1
+	if !req.VlessEnabled {
+		vlessVal = 0
+	}
+	trojanVal := 1
+	if !req.TrojanEnabled {
+		trojanVal = 0
+	}
+
 	newID := uuid.New().String()
-	_, err := DB.Exec("INSERT INTO users (id, name, data_limit, expire_time) VALUES (?, ?, ?, ?)", newID, req.Name, req.DataLimit, req.ExpireTime)
+	_, err := DB.Exec("INSERT INTO users (id, name, data_limit, expire_time, vless_enabled, trojan_enabled, custom_remark) VALUES (?, ?, ?, ?, ?, ?, ?)", 
+		newID, req.Name, req.DataLimit, req.ExpireTime, vlessVal, trojanVal, req.CustomRemark)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -264,17 +288,30 @@ func handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 
 func handleEditUser(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ID         string `json:"id"`
-		Name       string `json:"name"`
-		DataLimit  int64  `json:"data_limit"`
-		ExpireTime int64  `json:"expire_time"`
+		ID            string `json:"id"`
+		Name          string `json:"name"`
+		DataLimit     int64  `json:"data_limit"`
+		ExpireTime    int64  `json:"expire_time"`
+		VlessEnabled  bool   `json:"vless_enabled"`
+		TrojanEnabled bool   `json:"trojan_enabled"`
+		CustomRemark  string `json:"custom_remark"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	vlessVal := 1
+	if !req.VlessEnabled {
+		vlessVal = 0
+	}
+	trojanVal := 1
+	if !req.TrojanEnabled {
+		trojanVal = 0
+	}
 	
-	_, err := DB.Exec("UPDATE users SET name = ?, data_limit = ?, expire_time = ? WHERE id = ?", req.Name, req.DataLimit, req.ExpireTime, req.ID)
+	_, err := DB.Exec("UPDATE users SET name = ?, data_limit = ?, expire_time = ?, vless_enabled = ?, trojan_enabled = ?, custom_remark = ? WHERE id = ?", 
+		req.Name, req.DataLimit, req.ExpireTime, vlessVal, trojanVal, req.CustomRemark, req.ID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -358,7 +395,6 @@ func handleEditNode(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// ارسال لیست یوزرهای معتبر به ورکرها
 func handleNodeSync(w http.ResponseWriter, r *http.Request) {
 	authHeader := r.Header.Get("Authorization")
 	if len(authHeader) < 8 || authHeader[:7] != "Bearer " {
@@ -387,7 +423,6 @@ func handleNodeSync(w http.ResponseWriter, r *http.Request) {
 		var id string
 		var exp int64
 		rows.Scan(&id, &exp)
-		// فقط یوزرهایی که بدون انقضا هستن یا هنوز تایم دارن ارسال میشن
 		if exp == 0 || exp > now {
 			activeUUIDs = append(activeUUIDs, id)
 		}
@@ -403,7 +438,6 @@ func handleNodeSync(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ثبت مصرف ارسال شده از سمت ورکرها
 func handleReportUsage(w http.ResponseWriter, r *http.Request) {
 	authHeader := r.Header.Get("Authorization")
 	if len(authHeader) < 8 || authHeader[:7] != "Bearer " {
@@ -434,7 +468,6 @@ func handleReportUsage(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// موتور فوق هوشمند تولید لینک سابسکریپشن
 func handleSubscription(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("id")
 	if userID == "" {
@@ -444,7 +477,10 @@ func handleSubscription(w http.ResponseWriter, r *http.Request) {
 
 	var status string
 	var expireTime int64
-	err := DB.QueryRow("SELECT status, expire_time FROM users WHERE id = ?", userID).Scan(&status, &expireTime)
+	var vlessEnabled, trojanEnabled int
+	var customRemark string
+	
+	err := DB.QueryRow("SELECT status, expire_time, vless_enabled, trojan_enabled, custom_remark FROM users WHERE id = ?", userID).Scan(&status, &expireTime, &vlessEnabled, &trojanEnabled, &customRemark)
 	if err != nil || status != "active" {
 		http.Error(w, "User is inactive or not found", http.StatusNotFound)
 		return
@@ -467,21 +503,32 @@ func handleSubscription(w http.ResponseWriter, r *http.Request) {
 		var nName, nType, nAddr, nCleanIP string
 		rows.Scan(&nName, &nType, &nAddr, &nCleanIP)
 
-		// استفاده از آی‌پی تمیز در صورت وجود
-		targetIP := nAddr
+		safeAddr := cleanDomain(nAddr)
+		targetIP := safeAddr
 		if nCleanIP != "" {
-			targetIP = nCleanIP
+			targetIP = cleanDomain(nCleanIP)
+		}
+
+		// تعیین نام رمارک کانفیگ (استفاده از فرمت انتخابی ادمین یا نام پیش‌فرض نود)
+		remarkName := nName
+		if strings.TrimSpace(customRemark) != "" {
+			remarkName = strings.TrimSpace(customRemark)
 		}
 
 		if nType == "cloudflare" {
-			// استفاده از ed=2048 برای دور زدن فیلترینگ پکت‌های وب‌سوکت
-			vless := fmt.Sprintf("vless://%s@%s:443?encryption=none&security=tls&sni=%s&type=ws&host=%s&path=/?ed=2048#%s-VLESS", userID, targetIP, nAddr, nAddr, nName)
-			trojan := fmt.Sprintf("trojan://%s@%s:443?security=tls&sni=%s&type=ws&host=%s&path=/?ed=2048#%s-Trojan", userID, targetIP, nAddr, nAddr, nName)
-			configs = append(configs, vless, trojan)
+			if vlessEnabled == 1 {
+				vless := fmt.Sprintf("vless://%s@%s:443?encryption=none&security=tls&sni=%s&type=ws&host=%s&path=/?ed=2048#%s-VLESS", userID, targetIP, safeAddr, safeAddr, remarkName)
+				configs = append(configs, vless)
+			}
+			if trojanEnabled == 1 {
+				trojan := fmt.Sprintf("trojan://%s@%s:443?security=tls&sni=%s&type=ws&host=%s&path=/?ed=2048#%s-Trojan", userID, targetIP, safeAddr, safeAddr, remarkName)
+				configs = append(configs, trojan)
+			}
 		} else if nType == "railway" {
-			// کانفیگ اختصاصی ریلوی متصل به انجین داخلی
-			vless := fmt.Sprintf("vless://%s@%s:443?encryption=none&security=tls&sni=%s&type=ws&host=%s&path=/#%s-Master", userID, targetIP, nAddr, nAddr, nName)
-			configs = append(configs, vless)
+			if vlessEnabled == 1 {
+				vless := fmt.Sprintf("vless://%s@%s:443?encryption=none&security=tls&sni=%s&type=ws&host=%s&path=/#%s-Master", userID, targetIP, safeAddr, safeAddr, remarkName)
+				configs = append(configs, vless)
+			}
 		}
 	}
 

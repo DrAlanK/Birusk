@@ -3,65 +3,97 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Birusk Core</title>
-    <!-- Favicon -->
+    <title>Birusk Core Panel</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
     <style>
         :root {
-            --bg-base: #0f172a; --bg-surface: #1e293b; --primary: #6366f1;
-            --primary-hover: #4f46e5; --text-main: #f8fafc; --text-muted: #94a3b8;
-            --border: #334155; --danger: #ef4444; --success: #10b981;
+            --bg-base: #090d16;
+            --bg-surface: #131926;
+            --bg-card: #1e2638;
+            --primary: #6366f1;
+            --primary-hover: #4f46e5;
+            --text-main: #f8fafc;
+            --text-muted: #64748b;
+            --border: #262f45;
+            --danger: #f43f5e;
+            --success: #10b981;
+            --warning: #f59e0b;
         }
         [data-theme="light"] {
-            --bg-base: #f1f5f9; --bg-surface: #ffffff; --primary: #4f46e5;
-            --primary-hover: #4338ca; --text-main: #0f172a; --text-muted: #64748b;
+            --bg-base: #f8fafc;
+            --bg-surface: #ffffff;
+            --bg-card: #f1f5f9;
+            --primary: #4f46e5;
+            --primary-hover: #3730a3;
+            --text-main: #0f172a;
+            --text-muted: #94a3b8;
             --border: #e2e8f0;
         }
         
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
         body { background-color: var(--bg-base); color: var(--text-main); display: flex; height: 100vh; overflow: hidden; transition: background 0.3s; }
         
-        /* Modern Inputs */
-        input, select {
-            padding: 12px 16px; border-radius: 10px; border: 2px solid var(--border);
-            background: var(--bg-base); color: var(--text-main); outline: none;
-            transition: all 0.3s ease; font-size: 0.95rem;
-        }
-        input:focus, select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2); }
+        /* Sidebar Styles */
+        .sidebar { width: 260px; background-color: var(--bg-surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; transition: transform 0.3s ease; z-index: 1000; }
+        .logo-area { padding: 24px; display: flex; align-items: center; gap: 12px; font-size: 1.5rem; font-weight: bold; border-bottom: 1px solid var(--border); color: var(--primary); }
+        .nav-items { flex: 1; padding: 20px 12px; display: flex; flex-direction: column; gap: 8px; }
+        .nav-item { padding: 14px 16px; border-radius: 10px; cursor: pointer; display: flex; align-items: center; gap: 12px; color: var(--text-muted); text-decoration: none; font-weight: 500; transition: all 0.2s; }
+        .nav-item:hover, .nav-item.active { background-color: rgba(99, 102, 241, 0.1); color: var(--primary); }
         
-        button {
-            padding: 12px 24px; border-radius: 10px; border: none;
-            background: var(--primary); color: white; font-weight: 600;
-            cursor: pointer; transition: background 0.2s, transform 0.1s;
-        }
+        /* Main Layout */
+        .main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .header { height: 75px; background-color: var(--bg-surface); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; padding: 0 24px; }
+        .content-area { flex: 1; padding: 24px; overflow-y: auto; }
+        
+        /* Elements & Form Inputs */
+        .card { background-color: var(--bg-surface); border: 1px solid var(--border); border-radius: 16px; padding: 24px; margin-bottom: 24px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
+        input, select, textarea { padding: 12px 16px; border-radius: 10px; border: 2px solid var(--border); background: var(--bg-base); color: var(--text-main); outline: none; transition: all 0.3s ease; font-size: 0.95rem; width: 100%; }
+        input:focus, select:focus, textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15); }
+        
+        button { padding: 12px 24px; border-radius: 10px; border: none; background: var(--primary); color: white; font-weight: 600; cursor: pointer; transition: all 0.2s; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
         button:hover { background: var(--primary-hover); transform: translateY(-1px); }
         button:active { transform: translateY(1px); }
         .btn-danger { background: var(--danger); }
-        .btn-danger:hover { background: #dc2626; }
+        .btn-danger:hover { background: #e11d48; }
+        .btn-secondary { background: var(--bg-card); color: var(--text-main); border: 1px solid var(--border); }
+        .btn-secondary:hover { background: var(--border); }
         
-        /* Layout & Sidebar */
-        .sidebar {
-            width: 260px; background-color: var(--bg-surface); border-right: 1px solid var(--border);
-            display: flex; flex-direction: column; transition: transform 0.3s ease; z-index: 1000;
-        }
-        .logo-area { padding: 24px; display: flex; align-items: center; gap: 12px; font-size: 1.5rem; font-weight: bold; border-bottom: 1px solid var(--border); }
-        .nav-items { flex: 1; padding: 20px 12px; display: flex; flex-direction: column; gap: 8px; }
-        .nav-item { padding: 12px 16px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 12px; color: var(--text-muted); text-decoration: none; transition: all 0.2s; }
-        .nav-item:hover, .nav-item.active { background-color: rgba(99, 102, 241, 0.1); color: var(--primary); }
+        /* Tables */
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th { padding: 16px 12px; text-align: left; color: var(--text-muted); font-weight: 600; border-bottom: 2px solid var(--border); font-size: 0.9rem; }
+        td { padding: 16px 12px; text-align: left; border-bottom: 1px solid var(--border); font-size: 0.95rem; vertical-align: middle; }
+        tr:hover td { background-color: rgba(255,255,255,0.01); }
         
-        .main-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
-        .header { height: 70px; background-color: var(--bg-surface); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; padding: 0 24px; }
-        .content-area { flex: 1; padding: 24px; overflow-y: auto; }
+        /* Modals & Wizards */
+        .modal { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 2000; align-items: center; justify-content: center; padding: 16px; backdrop-filter: blur(4px); opacity: 0; transition: opacity 0.3s ease; }
+        .modal.open { display: flex; opacity: 1; }
+        .modal-content { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 20px; width: 100%; max-width: 550px; padding: 28px; max-height: 90vh; overflow-y: auto; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.3); transform: translateY(-20px); transition: transform 0.3s ease; }
+        .modal.open .modal-content { transform: translateY(0); }
+        .modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 14px; }
+        .modal-body { display: flex; flex-direction: column; gap: 16px; }
+        .modal-footer { display: flex; justify-content: flex-end; gap: 12px; margin-top: 24px; border-top: 1px solid var(--border); padding-top: 16px; }
+        .form-group { display: flex; flex-direction: column; gap: 8px; }
+        .form-group label { font-size: 0.9rem; color: var(--text-muted); font-weight: 500; }
+        .form-row { display: flex; gap: 16px; }
+        .form-row .form-group { flex: 1; }
         
-        .card { background-color: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; }
-        .grid-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; }
-        .card-title { display: block; font-size: 0.9rem; color: var(--text-muted); margin-bottom: 8px; }
-        .card-value { display: block; font-size: 1.8rem; font-weight: bold; }
+        /* Dashboard Visuals & Progress Bars */
+        .grid-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 24px; }
+        .card-title { display: block; font-size: 0.9rem; color: var(--text-muted); margin-bottom: 8px; font-weight: 500; }
+        .card-value { display: block; font-size: 2rem; font-weight: bold; margin-bottom: 12px; }
+        .visual-bar-container { background: var(--bg-base); border-radius: 6px; height: 8px; width: 100%; overflow: hidden; position: relative; }
+        .visual-bar { height: 100%; background: linear-gradient(90deg, var(--primary), #818cf8); border-radius: 6px; width: 0; transition: width 0.5s ease; }
         
-        table { width: 100%; border-collapse: collapse; }
-        th, td { padding: 14px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+        /* Custom Switches / Toggles */
+        .switch-group { display: flex; align-items: center; justify-content: space-between; background: var(--bg-card); padding: 12px 16px; border-radius: 12px; border: 1px solid var(--border); }
+        .switch { position: relative; display: inline-block; width: 44px; height: 24px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: var(--border); transition: .3s; border-radius: 24px; }
+        .slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: white; transition: .3s; border-radius: 50%; }
+        input:checked + .slider { background-color: var(--success); }
+        input:checked + .slider:before { transform: translateX(20px); }
         
-        /* Mobile Specific */
+        /* Mobile Hamburger & Overlay */
         .overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 999; opacity: 0; transition: opacity 0.3s ease; }
         #mobile-menu-btn { display: none; padding: 8px 12px; font-size: 1.2rem; background: transparent; border: 1px solid var(--border); color: var(--text-main); border-radius: 8px; }
         
@@ -71,7 +103,7 @@
             #mobile-menu-btn { display: block; }
         }
         
-        /* RTL Support for Farsi and Kurdish */
+        /* RTL Overrides */
         [dir="rtl"] .sidebar { border-right: none; border-left: 1px solid var(--border); }
         [dir="rtl"] th, [dir="rtl"] td { text-align: right; }
         @media (max-width: 768px) {
@@ -82,13 +114,15 @@
 </head>
 <body>
     <div class="sidebar" id="sidebar">
-        <div class="logo-area">⚡ Birusk</div>
+        <div class="logo-area">⚡ Birusk Master</div>
         <div class="nav-items">
-            <a href="#" class="nav-item active" data-page="dashboard" data-i18n="nav_dashboard">Dashboard</a>
-            <a href="#" class="nav-item" data-page="users" data-i18n="nav_users">Users</a>
-            <a href="#" class="nav-item" data-page="nodes" data-i18n="nav_nodes">Nodes</a>
+            <a href="#" class="nav-item active" data-page="dashboard" data-i18n="nav_dashboard">📊 Dashboard</a>
+            <a href="#" class="nav-item" data-page="users" data-i18n="nav_users">👥 Users Manager</a>
+            <a href="#" class="nav-item" data-page="nodes" data-i18n="nav_nodes">🌐 Nodes Server</a>
+            <a href="#" class="nav-item" data-page="settings" data-i18n="nav_settings">⚙️ Core Settings</a>
         </div>
     </div>
+    
     <div class="main-content">
         <div class="header">
             <div style="display: flex; align-items: center; gap: 12px;">
@@ -96,10 +130,9 @@
                 <h2 id="page-title" data-i18n="nav_dashboard">Dashboard</h2>
             </div>
             <div style="display: flex; align-items: center; gap: 12px;">
-                <select id="lang-selector">
+                <select id="lang-selector" style="width: auto; padding: 6px 12px;">
                     <option value="en">English</option>
                     <option value="fa">فارسی</option>
-                    <option value="ku">Kurdî</option>
                 </select>
                 <button id="theme-toggle" style="padding: 8px; background: transparent; border: 1px solid var(--border); color: var(--text-main); border-radius: 8px;">🌓</button>
             </div>
@@ -107,28 +140,111 @@
         <div class="content-area" id="content"></div>
     </div>
 
+    <div class="modal" id="user-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="user-modal-title">Create Subscription Wizard</h3>
+                <button onclick="closeModal('user-modal')" style="background:transparent; color:var(--text-muted); font-size:1.2rem;">✕</button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="form-user-id">
+                <div class="form-group">
+                    <label>Client Name / نام کاربر</label>
+                    <input type="text" id="form-user-name" placeholder="e.g. Alan">
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Traffic Limit / سقف حجم (GB)</label>
+                        <input type="number" id="form-user-limit" placeholder="0 = Unlimited" value="0">
+                    </div>
+                    <div class="form-group">
+                        <label>Validity Duration / مدت اعتبار (Days)</label>
+                        <input type="number" id="form-user-days" placeholder="0 = Unlimited" value="30">
+                    </div>
+                </div>
+                
+                <div style="margin-top: 10px; font-weight: 600; color: var(--primary);">Subscription Config Advanced Controller</div>
+                
+                <div class="switch-group">
+                    <div>
+                        <div style="font-weight: 600;">VLESS Protocol</div>
+                        <div style="font-size: 0.8rem; color: var(--text-muted);">Include VLESS configs in subscription link</div>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="form-user-vless" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                
+                <div class="switch-group">
+                    <div>
+                        <div style="font-weight: 600;">Trojan Protocol</div>
+                        <div style="font-size: 0.8rem; color: var(--text-muted);">Include Trojan configs in subscription link</div>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="form-user-trojan" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+
+                <div class="form-group">
+                    <label>Custom Remark Format / نام اختصاصی کانفیگ‌ها</label>
+                    <input type="text" id="form-user-remark" placeholder="e.g. AlanCoreNet - Leave blank for default">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="closeModal('user-modal')">Cancel</button>
+                <button id="btn-save-user" onclick="submitUserForm()">Save & Deploy</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="node-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="node-modal-title">Add Infrastructure Node</h3>
+                <button onclick="closeModal('node-modal')" style="background:transparent; color:var(--text-muted); font-size:1.2rem;">✕</button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="form-node-id">
+                <div class="form-group">
+                    <label>Node Brand Name / نام نود</label>
+                    <input type="text" id="form-node-name" placeholder="e.g. Cloudflare-Edge-1">
+                </div>
+                <div class="form-group">
+                    <label>Domain Server Address / آدرس دامنه اصلی نود</label>
+                    <input type="text" id="form-node-addr" placeholder="e.g. my-worker.username.workers.dev">
+                </div>
+                <div class="form-group">
+                    <label>Node Deployment Type / نوع نود زیرساخت</label>
+                    <select id="form-node-type">
+                        <option value="cloudflare">Cloudflare Worker Edge</option>
+                        <option value="railway">Railway Master Proxy Server</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" onclick="closeModal('node-modal')">Cancel</button>
+                <button id="btn-save-node" onclick="submitNodeForm()">Connect Node</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         const translations = {
             en: {
-                nav_dashboard: "Dashboard", nav_users: "Users", nav_nodes: "Nodes",
-                card_total_users: "Total Users", card_active_nodes: "Active Nodes",
-                card_network_traffic: "Network Traffic", card_system_status: "System Status",
-                status_online: "Online", btn_add_user: "Add User", btn_add_node: "Add Node",
-                table_name: "Name", table_usage: "Usage / Limit", table_status: "Status"
+                nav_dashboard: "📊 Dashboard", nav_users: "👥 Users Manager", nav_nodes: "🌐 Nodes Server", nav_settings: "⚙️ Core Settings",
+                card_total_users: "Total Subscriptions", card_active_nodes: "Online Edge Nodes",
+                card_network_traffic: "Aggregated Bandwidth", card_system_status: "Master Status",
+                status_online: "Online", btn_add_user: "+ Create Client Sub", btn_add_node: "+ Register Edge Node",
+                table_name: "Client Identifier", table_usage: "Data Utilization", table_status: "Status"
             },
             fa: {
-                nav_dashboard: "داشبورد", nav_users: "کاربران", nav_nodes: "سرورها (نود)",
-                card_total_users: "کل کاربران", card_active_nodes: "نودهای فعال",
-                card_network_traffic: "ترافیک مصرفی", card_system_status: "وضعیت سیستم",
-                status_online: "آنلاین", btn_add_user: "افزودن کاربر", btn_add_node: "افزودن نود",
-                table_name: "نام", table_usage: "مصرف / سقف مجاز", table_status: "وضعیت"
-            },
-            ku: {
-                nav_dashboard: "داشبۆرد", nav_users: "بەکارهێنەران", nav_nodes: "سێرڤەرەکان (نۆد)",
-                card_total_users: "کۆی بەکارهێنەران", card_active_nodes: "نۆدە چالاکەکان",
-                card_network_traffic: "ترافیکی بەکارهاتوو", card_system_status: "دۆخی سیستەم",
-                status_online: "ئۆنلاین", btn_add_user: "زیادکردنی بەکارهێنەر", btn_add_node: "زیادکردنی نۆد",
-                table_name: "ناو", table_usage: "بەکارهاتوو / سنوور", table_status: "دۆخ"
+                nav_dashboard: "📊 داشبورد آماری", nav_users: "👥 مدیریت کاربران", nav_nodes: "🌐 زیرساخت نودها", nav_settings: "⚙️ تنظیمات هسته",
+                card_total_users: "کل اشتراک‌های فعال", card_active_nodes: "نودهای متصل و آنلاین",
+                card_network_traffic: "ترافیک کل شبکه (Aggregated)", card_system_status: "وضعیت سرور مرکزی",
+                status_online: "عملیاتی / آنلاین", btn_add_user: "امتیاز اشتراک جدید +", btn_add_node: "ثبت نود زیرساخت +",
+                table_name: "شناسه / نام کاربر", table_usage: "حجم مصرفی / سقف مجاز", table_status: "وضعیت"
             }
         };
     </script>

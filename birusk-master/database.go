@@ -23,6 +23,9 @@ func InitDB(filepath string) {
 		status TEXT DEFAULT 'active',
 		data_limit INTEGER DEFAULT 0,
 		expire_time INTEGER DEFAULT 0,
+		vless_enabled INTEGER DEFAULT 1,
+		trojan_enabled INTEGER DEFAULT 1,
+		custom_remark TEXT DEFAULT '',
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 
@@ -52,6 +55,11 @@ func InitDB(filepath string) {
 	// آپدیت خودکار دیتابیس‌های قدیمی بدون پاک شدن اطلاعات قبلی کاربران و نودها
 	DB.Exec("ALTER TABLE users ADD COLUMN expire_time INTEGER DEFAULT 0;")
 	DB.Exec("ALTER TABLE nodes ADD COLUMN clean_ip TEXT DEFAULT '';")
+	
+	// آپدیت‌های جدید برای نسخه Enterprise (پروتکل‌ها و نام اختصاصی کانفیگ)
+	DB.Exec("ALTER TABLE users ADD COLUMN vless_enabled INTEGER DEFAULT 1;")
+	DB.Exec("ALTER TABLE users ADD COLUMN trojan_enabled INTEGER DEFAULT 1;")
+	DB.Exec("ALTER TABLE users ADD COLUMN custom_remark TEXT DEFAULT '';")
 }
 
 func RecordUsage(userID string, nodeID string, bytes int64) error {

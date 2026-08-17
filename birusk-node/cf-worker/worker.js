@@ -8,8 +8,6 @@ let syncPromise = null;
 
 async function syncConfig(env) {
     if (Date.now() - lastSync < 60000) return;
-    
-    // جلوگیری از درخواست‌های تکراری موقع روشن شدن ورکر (Cold Start)
     if (syncPromise) return syncPromise;
     
     syncPromise = (async () => {
@@ -24,9 +22,7 @@ async function syncConfig(env) {
                     lastSync = Date.now();
                 }
             }
-        } catch (e) {
-            // نادیده گرفتن ارور شبکه موقت
-        }
+        } catch (e) {}
         syncPromise = null;
     })();
     
@@ -55,7 +51,6 @@ async function flushUsage(env) {
             body: JSON.stringify(payload)
         });
         if (!resp.ok) {
-            // اگر ارسال ناموفق بود، مصرف به حافظه برگردانده شود
             for (const item of payload) {
                 recordUsage(item.user_id, item.bytes_used);
             }
@@ -85,7 +80,6 @@ export default {
                 return new Response("Birusk Edge Node Active ⚡", { status: 200 });
             }
 
-            // چک کردن حافظه کش برای دریافت لیست یوزرها
             if (authCache.size === 0) {
                 await syncConfig(env);
             } else {
@@ -104,6 +98,16 @@ export default {
             let isFirstChunk = true;
             let currentUserId = null;
 
+            const cleanup = () => {
+                if (remoteSocket) {
+                    try { remoteSocket.close(); } catch (e) {}
+                    remoteSocket = null;
+                }
+            };
+
+            ws.addEventListener("close", () => cleanup());
+            ws.addEventListener("error", () => cleanup());
+
             ws.addEventListener("message", async (e) => {
                 const data = e.data;
                 
@@ -118,7 +122,6 @@ export default {
                     
                     const currentUserHex = Array.from(view.slice(1, 17)).map(b => b.toString(16).padStart(2, "0")).join("");
                     
-                    // بررسی معتبر بودن یوزر
                     if (!authCache.has(currentUserHex)) {
                         ws.close(); 
                         return;
@@ -158,7 +161,12 @@ export default {
                         return;
                     }
                     
-                    ws.send(new Uint8Array([0, 0]));
+                    try {
+                        ws.send(new Uint8Array([0, 0]));
+                    } catch (err) {
+                        cleanup();
+                        return;
+                    }
                     
                     try {
                         remoteSocket = connect({ hostname: targetAddr, port: port });
@@ -171,7 +179,6 @@ export default {
                             writer.releaseLock();
                         }
                         
-                        // ردیابی ترافیک دریافتی از سرور مقصد
                         const trackingStream = new TransformStream({
                             transform(chunk, controller) {
                                 recordUsage(currentUserId, chunk.byteLength);
@@ -181,15 +188,19 @@ export default {
                         
                         remoteSocket.readable.pipeThrough(trackingStream).pipeTo(new WritableStream({
                             write(chunk) {
-                                // ایمن‌سازی وضعیت وب‌سوکت قبل از ارسال اطلاعات
-                                if (ws.readyState === WebSocket.OPEN) {
-                                    ws.send(chunk);
+                                try {
+                                    if (ws.readyState === 1) {
+                                        ws.send(chunk);
+                                    }
+                                } catch (err) {
+                                    cleanup();
                                 }
                             }
-                        })).catch(() => {});
+                        })).catch(() => { cleanup(); });
                         
                     } catch (err) {
                         ws.close();
+                        cleanup();
                     }
                 } else if (remoteSocket) {
                     recordUsage(currentUserId, data.byteLength);
@@ -199,15 +210,11 @@ export default {
                         writer.releaseLock();
                     } catch (err) {
                         ws.close();
+                        cleanup();
                     }
                 }
                 
                 ctx.waitUntil(flushUsage(env));
-            });
-
-            // قطع کامل کانکشن‌ها هنگام خروج کاربر برای جلوگیری از اشغال رم کلادفلر
-            ws.addEventListener("close", () => {
-                if (remoteSocket) remoteSocket.close();
             });
 
             return new Response(null, { status: 101, webSocket: client });
