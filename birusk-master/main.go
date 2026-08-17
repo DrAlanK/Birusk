@@ -13,17 +13,19 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
 type User struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Status    string `json:"status"`
-	DataLimit int64  `json:"data_limit"`
-	UsedData  int64  `json:"used_data"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	DataLimit  int64  `json:"data_limit"`
+	ExpireTime int64  `json:"expire_time"`
+	UsedData   int64  `json:"used_data"`
 }
 
 type Node struct {
@@ -31,6 +33,7 @@ type Node struct {
 	Name    string `json:"name"`
 	Type    string `json:"type"`
 	Address string `json:"address"`
+	CleanIP string `json:"clean_ip"`
 	Token   string `json:"token"`
 	Status  string `json:"status"`
 }
@@ -67,11 +70,19 @@ func main() {
 		fs.ServeHTTP(w, r)
 	})
 
+	// روت‌های مدیریت کاربران
 	mux.HandleFunc("GET /api/users", handleGetUsers)
 	mux.HandleFunc("POST /api/users", handleCreateUser)
+	mux.HandleFunc("DELETE /api/users", handleDeleteUser)
+	mux.HandleFunc("PUT /api/users", handleEditUser)
+
+	// روت‌های مدیریت نودها
 	mux.HandleFunc("GET /api/nodes", handleGetNodes)
 	mux.HandleFunc("POST /api/nodes", handleCreateNode)
-	
+	mux.HandleFunc("DELETE /api/nodes", handleDeleteNode)
+	mux.HandleFunc("PUT /api/nodes", handleEditNode)
+
+	// روت‌های ارتباطی با کلادفلر و کلاینت‌ها
 	mux.HandleFunc("GET /api/sync", handleNodeSync)
 	mux.HandleFunc("POST /api/usage", handleReportUsage)
 	mux.HandleFunc("GET /sub", handleSubscription)
@@ -100,9 +111,14 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := parsedUUID.String()
 
+	// بررسی وضعیت و تاریخ انقضای کاربر
 	var status string
-	err = DB.QueryRow("SELECT status FROM users WHERE id = ?", userID).Scan(&status)
+	var expireTime int64
+	err = DB.QueryRow("SELECT status, expire_time FROM users WHERE id = ?", userID).Scan(&status, &expireTime)
 	if err != nil || status != "active" {
+		return
+	}
+	if expireTime > 0 && time.Now().Unix() > expireTime {
 		return
 	}
 
@@ -111,6 +127,9 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 
 	optLen := int(firstChunk[17])
 	pPos := 18 + optLen + 1
+	if len(firstChunk) <= pPos+2 {
+		return
+	}
 	port := binary.BigEndian.Uint16(firstChunk[pPos : pPos+2])
 	aType := firstChunk[pPos+2]
 
@@ -181,7 +200,7 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleGetUsers(w http.ResponseWriter, r *http.Request) {
-	rows, err := DB.Query("SELECT id, name, status, data_limit FROM users")
+	rows, err := DB.Query("SELECT id, name, status, data_limit, expire_time FROM users")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -191,7 +210,7 @@ func handleGetUsers(w http.ResponseWriter, r *http.Request) {
 	var userList []User
 	for rows.Next() {
 		var u User
-		rows.Scan(&u.ID, &u.Name, &u.Status, &u.DataLimit)
+		rows.Scan(&u.ID, &u.Name, &u.Status, &u.DataLimit, &u.ExpireTime)
 		usage, _ := GetTotalUsage(u.ID)
 		u.UsedData = usage
 		userList = append(userList, u)
@@ -207,8 +226,9 @@ func handleGetUsers(w http.ResponseWriter, r *http.Request) {
 
 func handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name      string `json:"name"`
-		DataLimit int64  `json:"data_limit"`
+		Name       string `json:"name"`
+		DataLimit  int64  `json:"data_limit"`
+		ExpireTime int64  `json:"expire_time"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -216,27 +236,55 @@ func handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	newID := uuid.New().String()
-	_, err := DB.Exec("INSERT INTO users (id, name, data_limit) VALUES (?, ?, ?)", newID, req.Name, req.DataLimit)
+	_, err := DB.Exec("INSERT INTO users (id, name, data_limit, expire_time) VALUES (?, ?, ?, ?)", newID, req.Name, req.DataLimit, req.ExpireTime)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	newUser := User{
-		ID:        newID,
-		Name:      req.Name,
-		Status:    "active",
-		DataLimit: req.DataLimit,
-		UsedData:  0,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(newUser)
+}
+
+func handleDeleteUser(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	_, err := DB.Exec("DELETE FROM node_usage WHERE user_id = ?", id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	
+	_, err = DB.Exec("DELETE FROM users WHERE id = ?", id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	
+	w.WriteHeader(http.StatusOK)
+}
+
+func handleEditUser(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID         string `json:"id"`
+		Name       string `json:"name"`
+		DataLimit  int64  `json:"data_limit"`
+		ExpireTime int64  `json:"expire_time"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	
+	_, err := DB.Exec("UPDATE users SET name = ?, data_limit = ?, expire_time = ? WHERE id = ?", req.Name, req.DataLimit, req.ExpireTime, req.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	
+	w.WriteHeader(http.StatusOK)
 }
 
 func handleGetNodes(w http.ResponseWriter, r *http.Request) {
-	rows, err := DB.Query("SELECT id, name, type, address, token, status FROM nodes")
+	rows, err := DB.Query("SELECT id, name, type, address, clean_ip, token, status FROM nodes")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -246,7 +294,7 @@ func handleGetNodes(w http.ResponseWriter, r *http.Request) {
 	var nodeList []Node
 	for rows.Next() {
 		var n Node
-		rows.Scan(&n.ID, &n.Name, &n.Type, &n.Address, &n.Token, &n.Status)
+		rows.Scan(&n.ID, &n.Name, &n.Type, &n.Address, &n.CleanIP, &n.Token, &n.Status)
 		nodeList = append(nodeList, n)
 	}
 
@@ -259,11 +307,7 @@ func handleGetNodes(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleCreateNode(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Name    string `json:"name"`
-		Type    string `json:"type"`
-		Address string `json:"address"`
-	}
+	var req Node
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -272,26 +316,49 @@ func handleCreateNode(w http.ResponseWriter, r *http.Request) {
 	newID := uuid.New().String()
 	token := generateToken()
 
-	_, err := DB.Exec("INSERT INTO nodes (id, name, type, address, token) VALUES (?, ?, ?, ?, ?)", newID, req.Name, req.Type, req.Address, token)
+	_, err := DB.Exec("INSERT INTO nodes (id, name, type, address, clean_ip, token) VALUES (?, ?, ?, ?, ?, ?)", newID, req.Name, req.Type, req.Address, req.CleanIP, token)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	newNode := Node{
-		ID:      newID,
-		Name:    req.Name,
-		Type:    req.Type,
-		Address: req.Address,
-		Token:   token,
-		Status:  "active",
-	}
-
-	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(newNode)
 }
 
+func handleDeleteNode(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	_, err := DB.Exec("DELETE FROM node_usage WHERE node_id = ?", id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	
+	_, err = DB.Exec("DELETE FROM nodes WHERE id = ?", id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	
+	w.WriteHeader(http.StatusOK)
+}
+
+func handleEditNode(w http.ResponseWriter, r *http.Request) {
+	var req Node
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	
+	_, err := DB.Exec("UPDATE nodes SET name = ?, address = ?, clean_ip = ? WHERE id = ?", req.Name, req.Address, req.CleanIP, req.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	
+	w.WriteHeader(http.StatusOK)
+}
+
+// ارسال لیست یوزرهای معتبر به ورکرها
 func handleNodeSync(w http.ResponseWriter, r *http.Request) {
 	authHeader := r.Header.Get("Authorization")
 	if len(authHeader) < 8 || authHeader[:7] != "Bearer " {
@@ -306,7 +373,7 @@ func handleNodeSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := DB.Query("SELECT id FROM users WHERE status = 'active'")
+	rows, err := DB.Query("SELECT id, expire_time FROM users WHERE status = 'active'")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -314,10 +381,16 @@ func handleNodeSync(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	var activeUUIDs []string
+	now := time.Now().Unix()
+
 	for rows.Next() {
 		var id string
-		rows.Scan(&id)
-		activeUUIDs = append(activeUUIDs, id)
+		var exp int64
+		rows.Scan(&id, &exp)
+		// فقط یوزرهایی که بدون انقضا هستن یا هنوز تایم دارن ارسال میشن
+		if exp == 0 || exp > now {
+			activeUUIDs = append(activeUUIDs, id)
+		}
 	}
 
 	if activeUUIDs == nil {
@@ -330,6 +403,7 @@ func handleNodeSync(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ثبت مصرف ارسال شده از سمت ورکرها
 func handleReportUsage(w http.ResponseWriter, r *http.Request) {
 	authHeader := r.Header.Get("Authorization")
 	if len(authHeader) < 8 || authHeader[:7] != "Bearer " {
@@ -360,6 +434,7 @@ func handleReportUsage(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// موتور فوق هوشمند تولید لینک سابسکریپشن
 func handleSubscription(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("id")
 	if userID == "" {
@@ -368,13 +443,18 @@ func handleSubscription(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var status string
-	err := DB.QueryRow("SELECT status FROM users WHERE id = ?", userID).Scan(&status)
+	var expireTime int64
+	err := DB.QueryRow("SELECT status, expire_time FROM users WHERE id = ?", userID).Scan(&status, &expireTime)
 	if err != nil || status != "active" {
 		http.Error(w, "User is inactive or not found", http.StatusNotFound)
 		return
 	}
+	if expireTime > 0 && time.Now().Unix() > expireTime {
+		http.Error(w, "Subscription Expired", 403)
+		return
+	}
 
-	rows, err := DB.Query("SELECT name, type, address FROM nodes WHERE status = 'active'")
+	rows, err := DB.Query("SELECT name, type, address, clean_ip FROM nodes WHERE status = 'active'")
 	if err != nil {
 		http.Error(w, "Database error", http.StatusInternalServerError)
 		return
@@ -384,16 +464,23 @@ func handleSubscription(w http.ResponseWriter, r *http.Request) {
 	var configs []string
 
 	for rows.Next() {
-		var nName, nType, nAddr string
-		rows.Scan(&nName, &nType, &nAddr)
+		var nName, nType, nAddr, nCleanIP string
+		rows.Scan(&nName, &nType, &nAddr, &nCleanIP)
+
+		// استفاده از آی‌پی تمیز در صورت وجود
+		targetIP := nAddr
+		if nCleanIP != "" {
+			targetIP = nCleanIP
+		}
 
 		if nType == "cloudflare" {
-			vless := fmt.Sprintf("vless://%s@%s:443?encryption=none&security=tls&sni=%s&type=ws&host=%s&path=/#%s-VLESS", userID, nAddr, nAddr, nAddr, nName)
-			trojan := fmt.Sprintf("trojan://%s@%s:443?security=tls&sni=%s&type=ws&host=%s&path=/#%s-Trojan", userID, nAddr, nAddr, nAddr, nName)
+			// استفاده از ed=2048 برای دور زدن فیلترینگ پکت‌های وب‌سوکت
+			vless := fmt.Sprintf("vless://%s@%s:443?encryption=none&security=tls&sni=%s&type=ws&host=%s&path=/?ed=2048#%s-VLESS", userID, targetIP, nAddr, nAddr, nName)
+			trojan := fmt.Sprintf("trojan://%s@%s:443?security=tls&sni=%s&type=ws&host=%s&path=/?ed=2048#%s-Trojan", userID, targetIP, nAddr, nAddr, nName)
 			configs = append(configs, vless, trojan)
 		} else if nType == "railway" {
 			// کانفیگ اختصاصی ریلوی متصل به انجین داخلی
-			vless := fmt.Sprintf("vless://%s@%s:443?encryption=none&security=tls&sni=%s&type=ws&host=%s&path=/#%s-Master", userID, nAddr, nAddr, nAddr, nName)
+			vless := fmt.Sprintf("vless://%s@%s:443?encryption=none&security=tls&sni=%s&type=ws&host=%s&path=/#%s-Master", userID, targetIP, nAddr, nAddr, nName)
 			configs = append(configs, vless)
 		}
 	}

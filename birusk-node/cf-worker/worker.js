@@ -4,21 +4,33 @@ let authCache = new Set();
 let usageMap = new Map();
 let lastSync = 0;
 let lastUsageSync = 0;
+let syncPromise = null;
 
 async function syncConfig(env) {
     if (Date.now() - lastSync < 60000) return;
-    try {
-        const resp = await fetch(`${env.MASTER_URL}/api/sync`, {
-            headers: { "Authorization": `Bearer ${env.NODE_TOKEN}` }
-        });
-        if (resp.ok) {
-            const data = await resp.json();
-            if (data.uuids && Array.isArray(data.uuids)) {
-                authCache = new Set(data.uuids.map(u => u.replace(/-/g, '').toLowerCase()));
-                lastSync = Date.now();
+    
+    // جلوگیری از درخواست‌های تکراری موقع روشن شدن ورکر (Cold Start)
+    if (syncPromise) return syncPromise;
+    
+    syncPromise = (async () => {
+        try {
+            const resp = await fetch(`${env.MASTER_URL}/api/sync`, {
+                headers: { "Authorization": `Bearer ${env.NODE_TOKEN}` }
+            });
+            if (resp.ok) {
+                const data = await resp.json();
+                if (data.uuids && Array.isArray(data.uuids)) {
+                    authCache = new Set(data.uuids.map(u => u.replace(/-/g, '').toLowerCase()));
+                    lastSync = Date.now();
+                }
             }
+        } catch (e) {
+            // نادیده گرفتن ارور شبکه موقت
         }
-    } catch (e) {}
+        syncPromise = null;
+    })();
+    
+    return syncPromise;
 }
 
 async function flushUsage(env) {
@@ -43,6 +55,7 @@ async function flushUsage(env) {
             body: JSON.stringify(payload)
         });
         if (!resp.ok) {
+            // اگر ارسال ناموفق بود، مصرف به حافظه برگردانده شود
             for (const item of payload) {
                 recordUsage(item.user_id, item.bytes_used);
             }
@@ -55,6 +68,7 @@ async function flushUsage(env) {
 }
 
 function recordUsage(uuid, bytes) {
+    if (!uuid) return;
     const current = usageMap.get(uuid) || 0;
     usageMap.set(uuid, current + bytes);
 }
@@ -65,106 +79,140 @@ function formatUUID(hex) {
 
 export default {
     async fetch(request, env, ctx) {
-        const upgrade = request.headers.get("Upgrade");
-        if (!upgrade || upgrade.toLowerCase() !== "websocket") {
-            return new Response("Birusk Edge Node Active", { status: 200 });
-        }
+        try {
+            const upgrade = request.headers.get("Upgrade");
+            if (!upgrade || upgrade.toLowerCase() !== "websocket") {
+                return new Response("Birusk Edge Node Active ⚡", { status: 200 });
+            }
 
-        ctx.waitUntil(syncConfig(env));
-        ctx.waitUntil(flushUsage(env));
-
-        const [client, ws] = Object.values(new WebSocketPair());
-        ws.accept();
-
-        let remoteSocket = null;
-        let isFirstChunk = true;
-        let currentUserHex = null;
-        let currentUserId = null;
-
-        ws.addEventListener("message", async (e) => {
-            const data = e.data;
-            
-            if (isFirstChunk) {
-                isFirstChunk = false;
-                const view = new Uint8Array(data);
-                
-                if (view[0] !== 0) { 
-                    ws.close(); 
-                    return; 
-                }
-                
-                currentUserHex = Array.from(view.slice(1, 17)).map(b => b.toString(16).padStart(2, "0")).join("");
-                
-                if (!authCache.has(currentUserHex)) {
-                    ws.close(); 
-                    return;
-                }
-                
-                currentUserId = formatUUID(currentUserHex);
-                
-                recordUsage(currentUserId, data.byteLength);
-
-                const optLen = view[17];
-                const pPos = 18 + optLen + 1;
-                const port = new DataView(data.slice(pPos, pPos + 2)).getUint16(0);
-                const aType = view[pPos + 2];
-                
-                let vPos = pPos + 3;
-                let aLen = 0;
-                let targetAddr = "";
-                
-                if (aType === 1) {
-                    aLen = 4;
-                    targetAddr = view.slice(vPos, vPos + aLen).join(".");
-                } else if (aType === 2) {
-                    aLen = view[vPos];
-                    vPos++;
-                    targetAddr = new TextDecoder().decode(view.slice(vPos, vPos + aLen));
-                } else if (aType === 3) {
-                    aLen = 16;
-                    const dv = new DataView(data.slice(vPos, vPos + aLen));
-                    targetAddr = Array.from({ length: 8 }, (_, i) => dv.getUint16(i * 2).toString(16)).join(":");
-                }
-                
-                ws.send(new Uint8Array([0, 0]));
-                
-                try {
-                    remoteSocket = connect({ hostname: targetAddr, port: port });
-                    await remoteSocket.opened;
-                    
-                    const offset = vPos + aLen;
-                    if (offset < data.byteLength) {
-                        const writer = remoteSocket.writable.getWriter();
-                        await writer.write(data.slice(offset));
-                        writer.releaseLock();
-                    }
-                    
-                    let trackingStream = new TransformStream({
-                        transform(chunk, controller) {
-                            recordUsage(currentUserId, chunk.byteLength);
-                            controller.enqueue(chunk);
-                        }
-                    });
-                    
-                    remoteSocket.readable.pipeThrough(trackingStream).pipeTo(new WritableStream({
-                        write(chunk) {
-                            ws.send(chunk);
-                        }
-                    }));
-                } catch (err) {
-                    ws.close();
-                }
-            } else if (remoteSocket) {
-                recordUsage(currentUserId, data.byteLength);
-                
-                const writer = remoteSocket.writable.getWriter();
-                await writer.write(data);
-                writer.releaseLock();
+            // چک کردن حافظه کش برای دریافت لیست یوزرها
+            if (authCache.size === 0) {
+                await syncConfig(env);
+            } else {
+                ctx.waitUntil(syncConfig(env));
             }
             
             ctx.waitUntil(flushUsage(env));
-        });
 
-        return new Response(null, { status: 101, webSocket: client });
+            const webSocketPair = new WebSocketPair();
+            const client = webSocketPair[0];
+            const ws = webSocketPair[1];
+            
+            ws.accept();
+
+            let remoteSocket = null;
+            let isFirstChunk = true;
+            let currentUserId = null;
+
+            ws.addEventListener("message", async (e) => {
+                const data = e.data;
+                
+                if (isFirstChunk) {
+                    isFirstChunk = false;
+                    const view = new Uint8Array(data);
+                    
+                    if (view[0] !== 0) { 
+                        ws.close(); 
+                        return; 
+                    }
+                    
+                    const currentUserHex = Array.from(view.slice(1, 17)).map(b => b.toString(16).padStart(2, "0")).join("");
+                    
+                    // بررسی معتبر بودن یوزر
+                    if (!authCache.has(currentUserHex)) {
+                        ws.close(); 
+                        return;
+                    }
+                    
+                    currentUserId = formatUUID(currentUserHex);
+                    recordUsage(currentUserId, data.byteLength);
+
+                    const optLen = view[17];
+                    const pPos = 18 + optLen + 1;
+                    
+                    if (data.byteLength <= pPos + 2) {
+                        ws.close();
+                        return;
+                    }
+                    
+                    const port = new DataView(data.slice(pPos, pPos + 2)).getUint16(0);
+                    const aType = view[pPos + 2];
+                    
+                    let vPos = pPos + 3;
+                    let aLen = 0;
+                    let targetAddr = "";
+                    
+                    if (aType === 1) {
+                        aLen = 4;
+                        targetAddr = view.slice(vPos, vPos + aLen).join(".");
+                    } else if (aType === 2) {
+                        aLen = view[vPos];
+                        vPos++;
+                        targetAddr = new TextDecoder().decode(view.slice(vPos, vPos + aLen));
+                    } else if (aType === 3) {
+                        aLen = 16;
+                        const dv = new DataView(data.slice(vPos, vPos + aLen));
+                        targetAddr = Array.from({ length: 8 }, (_, i) => dv.getUint16(i * 2).toString(16)).join(":");
+                    } else {
+                        ws.close();
+                        return;
+                    }
+                    
+                    ws.send(new Uint8Array([0, 0]));
+                    
+                    try {
+                        remoteSocket = connect({ hostname: targetAddr, port: port });
+                        await remoteSocket.opened;
+                        
+                        const offset = vPos + aLen;
+                        if (offset < data.byteLength) {
+                            const writer = remoteSocket.writable.getWriter();
+                            await writer.write(data.slice(offset));
+                            writer.releaseLock();
+                        }
+                        
+                        // ردیابی ترافیک دریافتی از سرور مقصد
+                        const trackingStream = new TransformStream({
+                            transform(chunk, controller) {
+                                recordUsage(currentUserId, chunk.byteLength);
+                                controller.enqueue(chunk);
+                            }
+                        });
+                        
+                        remoteSocket.readable.pipeThrough(trackingStream).pipeTo(new WritableStream({
+                            write(chunk) {
+                                // ایمن‌سازی وضعیت وب‌سوکت قبل از ارسال اطلاعات
+                                if (ws.readyState === WebSocket.OPEN) {
+                                    ws.send(chunk);
+                                }
+                            }
+                        })).catch(() => {});
+                        
+                    } catch (err) {
+                        ws.close();
+                    }
+                } else if (remoteSocket) {
+                    recordUsage(currentUserId, data.byteLength);
+                    try {
+                        const writer = remoteSocket.writable.getWriter();
+                        await writer.write(data);
+                        writer.releaseLock();
+                    } catch (err) {
+                        ws.close();
+                    }
+                }
+                
+                ctx.waitUntil(flushUsage(env));
+            });
+
+            // قطع کامل کانکشن‌ها هنگام خروج کاربر برای جلوگیری از اشغال رم کلادفلر
+            ws.addEventListener("close", () => {
+                if (remoteSocket) remoteSocket.close();
+            });
+
+            return new Response(null, { status: 101, webSocket: client });
+        } catch (err) {
+            return new Response("Internal Error", { status: 500 });
+        }
     }
 }

@@ -22,6 +22,7 @@ func InitDB(filepath string) {
 		name TEXT NOT NULL,
 		status TEXT DEFAULT 'active',
 		data_limit INTEGER DEFAULT 0,
+		expire_time INTEGER DEFAULT 0,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 	);
 
@@ -30,6 +31,7 @@ func InitDB(filepath string) {
 		name TEXT NOT NULL,
 		type TEXT NOT NULL,
 		address TEXT NOT NULL,
+		clean_ip TEXT DEFAULT '',
 		token TEXT UNIQUE NOT NULL,
 		status TEXT DEFAULT 'active'
 	);
@@ -39,16 +41,17 @@ func InitDB(filepath string) {
 		node_id TEXT,
 		bytes_used INTEGER DEFAULT 0,
 		last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
-		PRIMARY KEY (user_id, node_id),
-		FOREIGN KEY (user_id) REFERENCES users(id),
-		FOREIGN KEY (node_id) REFERENCES nodes(id)
+		PRIMARY KEY (user_id, node_id)
 	);
 	`
-
 	_, err = DB.Exec(createTables)
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	// آپدیت خودکار دیتابیس‌های قدیمی بدون پاک شدن اطلاعات قبلی کاربران و نودها
+	DB.Exec("ALTER TABLE users ADD COLUMN expire_time INTEGER DEFAULT 0;")
+	DB.Exec("ALTER TABLE nodes ADD COLUMN clean_ip TEXT DEFAULT '';")
 }
 
 func RecordUsage(userID string, nodeID string, bytes int64) error {
