@@ -121,22 +121,24 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById(id).classList.remove('open');
     };
 
-    // --- ابزار تولید هوشمند Secret تلگرام ---
+    // --- ابزار تولید هوشمند Secret تلگرام (اصلاح شده برای ربات) ---
     window.generateMtprotoSecret = () => {
         const chars = '0123456789abcdef';
         let hex = '';
+        // تولید دقیقاً 32 کاراکتر هگزادسیمال برای ثبت در ربات تلگرام
         for (let i = 0; i < 32; i++) {
             hex += chars[Math.floor(Math.random() * chars.length)];
         }
-        const finalSecret = 'dd' + hex;
-        document.getElementById('setting-mtproto-secret').value = finalSecret;
+        document.getElementById('setting-mtproto-secret').value = hex;
         const hintEl = document.getElementById('hint-secret');
-        if (hintEl) hintEl.innerText = finalSecret;
+        if (hintEl) hintEl.innerText = hex;
     };
 
     window.updatePortHint = (val) => {
         const hintEl = document.getElementById('hint-port');
-        if (hintEl) hintEl.innerText = val || '8443';
+        let tgHost = coreSettings.subDomain || window.location.hostname;
+        tgHost = tgHost.replace(/^https?:\/\//, '').split('/')[0];
+        if (hintEl) hintEl.innerText = `${tgHost}:${val || '8443'}`;
     };
 
     // --- منطق پیشرفته کاربران (Wizards) ---
@@ -288,7 +290,6 @@ document.addEventListener('DOMContentLoaded', () => {
         coreSettings.defaultCleanIp = document.getElementById('setting-cleanip').value;
         coreSettings.enableStats = document.getElementById('setting-stats').checked;
         
-        // ذخیره تنظیمات تلگرام پروکسی
         coreSettings.mtprotoEnabled = document.getElementById('setting-mtproto-enable').checked;
         coreSettings.mtprotoPort = document.getElementById('setting-mtproto-port').value;
         coreSettings.mtprotoSecret = document.getElementById('setting-mtproto-secret').value;
@@ -395,7 +396,14 @@ document.addEventListener('DOMContentLoaded', () => {
                                 if (coreSettings.mtprotoEnabled && coreSettings.mtprotoPort && coreSettings.mtprotoSecret) {
                                     let tgServer = coreSettings.subDomain || window.location.hostname;
                                     tgServer = tgServer.replace(/^https?:\/\//, '').split('/')[0];
-                                    let tgLink = `tg://proxy?server=${tgServer}&port=${coreSettings.mtprotoPort}&secret=${coreSettings.mtprotoSecret}`;
+                                    
+                                    let linkSecret = coreSettings.mtprotoSecret;
+                                    // اضافه کردن پیشوند dd فقط برای تولید لینک تلگرام کلاینت‌ها جهت امنیت بیشتر
+                                    if (linkSecret.length === 32) {
+                                        linkSecret = 'dd' + linkSecret;
+                                    }
+                                    
+                                    let tgLink = `tg://proxy?server=${tgServer}&port=${coreSettings.mtprotoPort}&secret=${linkSecret}`;
                                     tgBtnHtml = `<button onclick="copyText('${tgLink}', 'Telegram Proxy Link Copied!')" class="btn-telegram" style="padding:8px 12px; font-size:0.85rem; border-radius:8px;">✈️ TG Proxy</button>`;
                                 }
 
@@ -514,6 +522,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             </label>
                         </div>
                         
+                        <!-- پنل اختصاصی MTProto اسپانسری تلگرام -->
                         <h3 style="margin-top: 32px; margin-bottom: 16px; color: var(--telegram); border-bottom: 1px solid var(--border); padding-bottom: 12px;">Telegram MTProto Proxy</h3>
                         
                         <div class="switch-group" style="margin-bottom: 20px;">
@@ -539,20 +548,20 @@ document.addEventListener('DOMContentLoaded', () => {
                         </div>
                         
                         <div class="form-group" style="margin-bottom: 20px;">
-                            <label style="font-weight:bold; margin-bottom:8px;">MTProto Secret</label>
+                            <label style="font-weight:bold; margin-bottom:8px;">MTProto Secret (Exactly 32 Hex Chars)</label>
                             <div style="display:flex; gap:12px;">
                                 <input type="text" id="setting-mtproto-secret" placeholder="Click Auto Generate..." value="${coreSettings.mtprotoSecret || ''}" style="flex:1;">
                                 <button onclick="generateMtprotoSecret()" class="btn-secondary" style="color:var(--telegram); border-color:var(--telegram); white-space:nowrap;">🔄 Auto Generate</button>
                             </div>
                         </div>
 
+                        <!-- راهنمای ثبت در ربات تلگرام -->
                         <div style="background: rgba(46, 170, 220, 0.05); border: 1px dashed var(--telegram); padding: 16px; border-radius: 12px; margin-bottom: 30px;">
                             <h4 style="color: var(--telegram); margin-bottom: 12px; display:flex; align-items:center; gap:8px;">🤖 @TelegramProxyBot Registration Info</h4>
-                            <p style="font-size:0.9rem; margin-bottom: 12px; color:var(--text-main);">To register your proxy and get a Sponsor Tag, send these exact details to the bot:</p>
+                            <p style="font-size:0.9rem; margin-bottom: 12px; color:var(--text-main);">To register your proxy and get a Sponsor Tag, copy and send these exact details to the bot:</p>
                             <ul style="list-style:none; font-family:monospace; color:var(--text-muted); font-size:0.95rem; line-height:1.8; background:var(--bg-base); padding:12px; border-radius:8px; border:1px solid var(--border);">
-                                <li><strong style="color:var(--text-main); display:inline-block; width:70px;">IP/Host:</strong> ${tgHost}</li>
-                                <li><strong style="color:var(--text-main); display:inline-block; width:70px;">Port:</strong> <span id="hint-port">${coreSettings.mtprotoPort || '8443'}</span></li>
-                                <li><strong style="color:var(--text-main); display:inline-block; width:70px;">Secret:</strong> <span id="hint-secret">${coreSettings.mtprotoSecret || '(Click Auto Generate First)'}</span></li>
+                                <li><strong style="color:var(--text-main); display:inline-block; width:80px;">Host:Port </strong> <span id="hint-port">${tgHost}:${coreSettings.mtprotoPort || '8443'}</span></li>
+                                <li><strong style="color:var(--text-main); display:inline-block; width:80px;">Secret </strong> <span id="hint-secret">${coreSettings.mtprotoSecret || '(Click Auto Generate First)'}</span></li>
                             </ul>
                         </div>
 
