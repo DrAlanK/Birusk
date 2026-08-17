@@ -29,6 +29,7 @@ func InitDB(filepath string) {
 		id TEXT PRIMARY KEY,
 		name TEXT NOT NULL,
 		type TEXT NOT NULL,
+		address TEXT NOT NULL,
 		token TEXT UNIQUE NOT NULL,
 		status TEXT DEFAULT 'active'
 	);

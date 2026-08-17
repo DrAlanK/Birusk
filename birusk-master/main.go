@@ -2,11 +2,14 @@ package main
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -20,11 +23,12 @@ type User struct {
 }
 
 type Node struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Type   string `json:"type"`
-	Token  string `json:"token"`
-	Status string `json:"status"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	Address string `json:"address"`
+	Token   string `json:"token"`
+	Status  string `json:"status"`
 }
 
 func generateToken() string {
@@ -52,6 +56,9 @@ func main() {
 	
 	mux.HandleFunc("GET /api/sync", handleNodeSync)
 	mux.HandleFunc("POST /api/usage", handleReportUsage)
+	
+	// روت تولید لینک سابسکریپشن
+	mux.HandleFunc("GET /sub", handleSubscription)
 
 	log.Printf("Birusk Master Node running on port %s", port)
 	log.Fatal(http.ListenAndServe(":"+port, mux))
@@ -113,7 +120,7 @@ func handleCreateUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleGetNodes(w http.ResponseWriter, r *http.Request) {
-	rows, err := DB.Query("SELECT id, name, type, token, status FROM nodes")
+	rows, err := DB.Query("SELECT id, name, type, address, token, status FROM nodes")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -123,7 +130,7 @@ func handleGetNodes(w http.ResponseWriter, r *http.Request) {
 	var nodeList []Node
 	for rows.Next() {
 		var n Node
-		rows.Scan(&n.ID, &n.Name, &n.Type, &n.Token, &n.Status)
+		rows.Scan(&n.ID, &n.Name, &n.Type, &n.Address, &n.Token, &n.Status)
 		nodeList = append(nodeList, n)
 	}
 
@@ -137,8 +144,9 @@ func handleGetNodes(w http.ResponseWriter, r *http.Request) {
 
 func handleCreateNode(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name string `json:"name"`
-		Type string `json:"type"`
+		Name    string `json:"name"`
+		Type    string `json:"type"`
+		Address string `json:"address"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -148,18 +156,19 @@ func handleCreateNode(w http.ResponseWriter, r *http.Request) {
 	newID := uuid.New().String()
 	token := generateToken()
 
-	_, err := DB.Exec("INSERT INTO nodes (id, name, type, token) VALUES (?, ?, ?, ?)", newID, req.Name, req.Type, token)
+	_, err := DB.Exec("INSERT INTO nodes (id, name, type, address, token) VALUES (?, ?, ?, ?, ?)", newID, req.Name, req.Type, req.Address, token)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	newNode := Node{
-		ID:     newID,
-		Name:   req.Name,
-		Type:   req.Type,
-		Token:  token,
-		Status: "active",
+		ID:      newID,
+		Name:    req.Name,
+		Type:    req.Type,
+		Address: req.Address,
+		Token:   token,
+		Status:  "active",
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -233,4 +242,54 @@ func handleReportUsage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// سیستم تولید سابسکریپشن و کانفیگ‌های مختلف
+func handleSubscription(w http.ResponseWriter, r *http.Request) {
+	userID := r.URL.Query().Get("id")
+	if userID == "" {
+		http.Error(w, "Missing User ID", http.StatusBadRequest)
+		return
+	}
+
+	var status string
+	err := DB.QueryRow("SELECT status FROM users WHERE id = ?", userID).Scan(&status)
+	if err != nil || status != "active" {
+		http.Error(w, "User is inactive or not found", http.StatusNotFound)
+		return
+	}
+
+	rows, err := DB.Query("SELECT name, type, address FROM nodes WHERE status = 'active'")
+	if err != nil {
+		http.Error(w, "Database error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var configs []string
+
+	for rows.Next() {
+		var nName, nType, nAddr string
+		rows.Scan(&nName, &nType, &nAddr)
+
+		if nType == "cloudflare" {
+			vless := fmt.Sprintf("vless://%s@%s:443?encryption=none&security=tls&sni=%s&type=ws&host=%s&path=/#%s-VLESS", userID, nAddr, nAddr, nAddr, nName)
+			trojan := fmt.Sprintf("trojan://%s@%s:443?security=tls&sni=%s&type=ws&host=%s&path=/#%s-Trojan", userID, nAddr, nAddr, nAddr, nName)
+			configs = append(configs, vless, trojan)
+		} else if nType == "railway" {
+			vless := fmt.Sprintf("vless://%s@%s:443?encryption=none&security=tls&sni=%s&type=ws&host=%s&path=/#%s-Direct", userID, nAddr, nAddr, nAddr, nName)
+			
+			vmessJson := fmt.Sprintf(`{"v":"2","ps":"%s-VMess","add":"%s","port":"443","id":"%s","aid":"0","scy":"auto","net":"ws","type":"none","host":"%s","path":"/","tls":"tls","sni":"%s","alpn":""}`, nName, nAddr, userID, nAddr, nAddr)
+			vmessB64 := base64.StdEncoding.EncodeToString([]byte(vmessJson))
+			vmess := "vmess://" + vmessB64
+			
+			configs = append(configs, vless, vmess)
+		}
+	}
+
+	finalStr := strings.Join(configs, "\n")
+	encodedSub := base64.StdEncoding.EncodeToString([]byte(finalStr))
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Write([]byte(encodedSub))
 }
