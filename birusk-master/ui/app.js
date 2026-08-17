@@ -10,6 +10,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     let usersData = [];
     let nodesData = [];
+    
     // ذخیره تنظیمات در لوکال استوریج تا زمانی که دیتابیس بک‌اند رو برای تنظیمات آپدیت کنیم
     let coreSettings = JSON.parse(localStorage.getItem('birusk_settings')) || {
         subDomain: '',
@@ -48,7 +49,7 @@ document.addEventListener('DOMContentLoaded', () => {
     mobileBtn.addEventListener('click', toggleMenu);
     overlay.addEventListener('click', toggleMenu);
 
-    // --- سیستم چند زبانه (Localization) ---
+    // --- سیستم چند زبانه ---
     let currentLang = localStorage.getItem('lang') || 'en';
     
     const applyLang = (lang) => {
@@ -74,7 +75,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if(activePage) renderContent(activePage);
     });
 
-    // --- توابع کمکی و فرمت‌بندی ---
+    // --- توابع کمکی ---
     const formatBytes = (bytes) => {
         if (!bytes || bytes === 0) return '0 B';
         const k = 1024, sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -108,7 +109,6 @@ document.addEventListener('DOMContentLoaded', () => {
         navigator.clipboard.writeText(text).then(() => alert(msg)).catch(() => alert('Copy Failed!'));
     };
 
-    // --- مدیریت مودال‌ها (Wizards) ---
     window.openModal = (id) => {
         document.getElementById(id).classList.add('open');
     };
@@ -132,12 +132,22 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             document.getElementById('form-user-days').value = daysLeft;
             
+            // بازیابی تیک‌های پروتکل و کاستوم رمارک از دیتابیس
+            document.getElementById('form-user-vless').checked = (u.vless_enabled !== 0);
+            document.getElementById('form-user-trojan').checked = (u.trojan_enabled !== 0);
+            document.getElementById('form-user-remark').value = u.custom_remark || '';
+            
             document.getElementById('user-modal-title').innerText = currentLang === 'fa' ? 'ویرایش کانفیگ و اشتراک' : 'Edit Subscription';
         } else {
             document.getElementById('form-user-id').value = '';
             document.getElementById('form-user-name').value = '';
             document.getElementById('form-user-limit').value = '0';
             document.getElementById('form-user-days').value = '30';
+            
+            document.getElementById('form-user-vless').checked = true;
+            document.getElementById('form-user-trojan').checked = true;
+            document.getElementById('form-user-remark').value = '';
+            
             document.getElementById('user-modal-title').innerText = currentLang === 'fa' ? 'ایجاد اشتراک جدید' : 'Create Subscription';
         }
         openModal('user-modal');
@@ -148,8 +158,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const name = document.getElementById('form-user-name').value;
         const limit = parseFloat(document.getElementById('form-user-limit').value || 0);
         const days = parseInt(document.getElementById('form-user-days').value || 0);
-        
-        // مقادیر جدید که در دیتابیس بعدی اعمال می‌شوند
         const useVless = document.getElementById('form-user-vless').checked;
         const useTrojan = document.getElementById('form-user-trojan').checked;
         const remark = document.getElementById('form-user-remark').value;
@@ -163,7 +171,6 @@ document.addEventListener('DOMContentLoaded', () => {
             name: name, 
             data_limit: limit * (1024**3), 
             expire_time: exp,
-            // ارسال پارامترهای پیشرفته به بک‌اند
             vless_enabled: useVless,
             trojan_enabled: useTrojan,
             custom_remark: remark
@@ -196,7 +203,7 @@ document.addEventListener('DOMContentLoaded', () => {
         renderContent('users');
     };
 
-    // --- منطق پیشرفته نودها (Wizards) ---
+    // --- منطق پیشرفته نودها ---
     window.openNodeWizard = (id = null) => {
         if (id) {
             const n = nodesData.find(x => x.id === id);
@@ -244,7 +251,6 @@ document.addEventListener('DOMContentLoaded', () => {
         btn.innerText = 'Connect Node';
         closeModal('node-modal');
         
-        // بعد از ساخت نود، الرت موفقیت و دریافت توکن رو نشون میدیم
         alert(currentLang === 'fa' ? 'نود با موفقیت ثبت شد. توکن ارتباطی تولید گردید.' : 'Node registered successfully. Token generated.');
         renderContent('nodes');
     };
@@ -255,7 +261,7 @@ document.addEventListener('DOMContentLoaded', () => {
         renderContent('nodes');
     };
 
-    // --- مدیریت تنظیمات هسته (Core Settings) ---
+    // --- تنظیمات هسته (Core Settings) ---
     window.saveSettings = () => {
         coreSettings.subDomain = document.getElementById('setting-domain').value;
         coreSettings.defaultCleanIp = document.getElementById('setting-cleanip').value;
@@ -288,7 +294,6 @@ document.addEventListener('DOMContentLoaded', () => {
             const activeNodes = nodesData.filter(n => n.status === 'active').length;
             const expiredUsers = usersData.filter(u => u.expire_time > 0 && (u.expire_time * 1000) < Date.now()).length;
             
-            // محاسبه درصد استفاده کلی شبکه
             let networkPercent = 0;
             if (maxTrafficCap > 0) {
                 networkPercent = Math.min(Math.round((totalTraffic / maxTrafficCap) * 100), 100);
@@ -344,12 +349,11 @@ document.addEventListener('DOMContentLoaded', () => {
                                 if(u.data_limit > 0) percent = Math.min(Math.round((u.used_data / u.data_limit) * 100), 100);
                                 const isExp = u.expire_time > 0 && (u.expire_time * 1000) < Date.now();
                                 
-                                // استفاده از دامنه کاستوم اگر در تنظیمات ست شده باشد
                                 const subBaseUrl = coreSettings.subDomain ? 
                                     (coreSettings.subDomain.startsWith('http') ? coreSettings.subDomain : 'https://' + coreSettings.subDomain) : 
                                     window.location.origin;
                                     
-                                const subLink = \`\${subBaseUrl}/sub?id=\${u.id}\`;
+                                const subLink = `${subBaseUrl}/sub?id=${u.id}`;
 
                                 return `
                                 <tr>
@@ -472,7 +476,7 @@ document.addEventListener('DOMContentLoaded', () => {
         applyLang(currentLang);
     };
 
-    // --- مدیریت نویگیشن (Navigation) ---
+    // --- مدیریت نویگیشن ---
     const navItems = document.querySelectorAll('.nav-item');
     navItems.forEach(item => {
         item.addEventListener('click', (e) => {
@@ -495,7 +499,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    // شروع صفحه
+    // شروع رندر شدن داشبورد
     applyLang(currentLang);
     renderContent('dashboard');
 });
