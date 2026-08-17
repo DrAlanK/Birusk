@@ -121,6 +121,24 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById(id).classList.remove('open');
     };
 
+    // --- ابزار تولید هوشمند Secret تلگرام ---
+    window.generateMtprotoSecret = () => {
+        const chars = '0123456789abcdef';
+        let hex = '';
+        for (let i = 0; i < 32; i++) {
+            hex += chars[Math.floor(Math.random() * chars.length)];
+        }
+        const finalSecret = 'dd' + hex;
+        document.getElementById('setting-mtproto-secret').value = finalSecret;
+        const hintEl = document.getElementById('hint-secret');
+        if (hintEl) hintEl.innerText = finalSecret;
+    };
+
+    window.updatePortHint = (val) => {
+        const hintEl = document.getElementById('hint-port');
+        if (hintEl) hintEl.innerText = val || '8443';
+    };
+
     // --- منطق پیشرفته کاربران (Wizards) ---
     window.openUserWizard = (id = null) => {
         if (id) {
@@ -282,12 +300,12 @@ document.addEventListener('DOMContentLoaded', () => {
         btn.innerText = 'Saved Successfully! ✔️';
         btn.style.background = 'var(--success)';
         
-        // فراخوانی API برای آپدیت تنظیمات در بک‌اند (در فاز بعدی main.go این روت را می‌سازیم)
+        // فراخوانی API برای آپدیت تنظیمات در بک‌اند
         fetch('/api/settings', { 
             method: 'POST', 
             headers: { 'Content-Type': 'application/json' }, 
             body: JSON.stringify(coreSettings) 
-        }).catch(e => console.log("Settings API will be ready after backend update."));
+        }).catch(e => console.log("Settings API sync error", e));
 
         setTimeout(() => {
             btn.innerText = 'Save Core Configurations';
@@ -465,6 +483,9 @@ document.addEventListener('DOMContentLoaded', () => {
             `;
         }
         else if (page === 'settings') {
+            let tgHost = coreSettings.subDomain || window.location.hostname;
+            tgHost = tgHost.replace(/^https?:\/\//, '').split('/')[0];
+
             htmlContent = `
                 <div style="max-width: 800px; margin: 0 auto;">
                     <div class="card">
@@ -509,17 +530,30 @@ document.addEventListener('DOMContentLoaded', () => {
                         <div class="form-row" style="margin-bottom: 20px;">
                             <div class="form-group">
                                 <label style="font-weight:bold; margin-bottom:8px;">Proxy Port</label>
-                                <input type="number" id="setting-mtproto-port" placeholder="e.g. 8443" value="${coreSettings.mtprotoPort || '8443'}">
+                                <input type="number" id="setting-mtproto-port" placeholder="e.g. 8443" value="${coreSettings.mtprotoPort || '8443'}" onkeyup="updatePortHint(this.value)">
                             </div>
                             <div class="form-group">
-                                <label style="font-weight:bold; margin-bottom:8px;">Proxy Tag (from Bot)</label>
-                                <input type="text" id="setting-mtproto-tag" placeholder="e.g. a7b8c9d0..." value="${coreSettings.mtprotoTag || ''}">
+                                <label style="font-weight:bold; margin-bottom:8px;">Sponsor Tag (from Bot)</label>
+                                <input type="text" id="setting-mtproto-tag" placeholder="Paste tag from @TelegramProxyBot" value="${coreSettings.mtprotoTag || ''}">
                             </div>
                         </div>
                         
-                        <div class="form-group" style="margin-bottom: 30px;">
-                            <label style="font-weight:bold; margin-bottom:8px;">MTProto Secret (Starts with 'dd')</label>
-                            <input type="text" id="setting-mtproto-secret" placeholder="e.g. ddea1234567890abcdef..." value="${coreSettings.mtprotoSecret || ''}">
+                        <div class="form-group" style="margin-bottom: 20px;">
+                            <label style="font-weight:bold; margin-bottom:8px;">MTProto Secret</label>
+                            <div style="display:flex; gap:12px;">
+                                <input type="text" id="setting-mtproto-secret" placeholder="Click Auto Generate..." value="${coreSettings.mtprotoSecret || ''}" style="flex:1;">
+                                <button onclick="generateMtprotoSecret()" class="btn-secondary" style="color:var(--telegram); border-color:var(--telegram); white-space:nowrap;">🔄 Auto Generate</button>
+                            </div>
+                        </div>
+
+                        <div style="background: rgba(46, 170, 220, 0.05); border: 1px dashed var(--telegram); padding: 16px; border-radius: 12px; margin-bottom: 30px;">
+                            <h4 style="color: var(--telegram); margin-bottom: 12px; display:flex; align-items:center; gap:8px;">🤖 @TelegramProxyBot Registration Info</h4>
+                            <p style="font-size:0.9rem; margin-bottom: 12px; color:var(--text-main);">To register your proxy and get a Sponsor Tag, send these exact details to the bot:</p>
+                            <ul style="list-style:none; font-family:monospace; color:var(--text-muted); font-size:0.95rem; line-height:1.8; background:var(--bg-base); padding:12px; border-radius:8px; border:1px solid var(--border);">
+                                <li><strong style="color:var(--text-main); display:inline-block; width:70px;">IP/Host:</strong> ${tgHost}</li>
+                                <li><strong style="color:var(--text-main); display:inline-block; width:70px;">Port:</strong> <span id="hint-port">${coreSettings.mtprotoPort || '8443'}</span></li>
+                                <li><strong style="color:var(--text-main); display:inline-block; width:70px;">Secret:</strong> <span id="hint-secret">${coreSettings.mtprotoSecret || '(Click Auto Generate First)'}</span></li>
+                            </ul>
                         </div>
 
                         <button id="btn-save-settings" onclick="saveSettings()" style="width:100%; font-size:1.1rem; padding:16px;">Save Core Configurations</button>
