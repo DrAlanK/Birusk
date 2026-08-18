@@ -1,16 +1,20 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -63,8 +67,8 @@ var upgrader = websocket.Upgrader{
 }
 
 var (
-	mtprotoListener net.Listener
-	mtprotoMutex    sync.Mutex
+	mtprotoProcess *exec.Cmd
+	mtprotoMutex   sync.Mutex
 )
 
 // --- توابع کمکی (Utilities) ---
@@ -95,13 +99,12 @@ func main() {
 
 	InitDB("birusk.db")
 
-	// راه‌اندازی اولیه موتور تلگرام در صورت فعال بودن در تنظیمات
+	// استارت کردن پروکسی تلگرام در بک‌گراند (در صورت فعال بودن در دیتابیس)
 	initialSettings := loadSettingsFromDB()
-	applyMtprotoEngine(initialSettings)
+	go applyMtprotoEngine(initialSettings)
 
 	mux := http.NewServeMux()
 
-	// ترکیب هوشمند فایل‌سرور و وب‌سوکت روی پورت واحد
 	fs := http.FileServer(http.Dir("./ui"))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.ToLower(r.Header.Get("Upgrade")) == "websocket" {
@@ -111,23 +114,19 @@ func main() {
 		fs.ServeHTTP(w, r)
 	})
 
-	// روت‌های مدیریت کاربران
 	mux.HandleFunc("GET /api/users", handleGetUsers)
 	mux.HandleFunc("POST /api/users", handleCreateUser)
 	mux.HandleFunc("DELETE /api/users", handleDeleteUser)
 	mux.HandleFunc("PUT /api/users", handleEditUser)
 
-	// روت‌های مدیریت نودها
 	mux.HandleFunc("GET /api/nodes", handleGetNodes)
 	mux.HandleFunc("POST /api/nodes", handleCreateNode)
 	mux.HandleFunc("DELETE /api/nodes", handleDeleteNode)
 	mux.HandleFunc("PUT /api/nodes", handleEditNode)
 
-	// روت‌های تنظیمات سیستم
 	mux.HandleFunc("GET /api/settings", handleGetSettings)
 	mux.HandleFunc("POST /api/settings", handleSaveSettings)
 
-	// روت‌های همگام‌سازی و سابسکریپشن
 	mux.HandleFunc("GET /api/sync", handleNodeSync)
 	mux.HandleFunc("POST /api/usage", handleReportUsage)
 	mux.HandleFunc("GET /sub", handleSubscription)
@@ -244,7 +243,7 @@ func handleProxy(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// --- مدیریت تنظیمات و پروکسی MTProto اسپانسری ---
+// --- مدیریت تنظیمات و دانلود/اجرای پروکسی MTProto اسپانسری ---
 
 func loadSettingsFromDB() AppSettings {
 	var s AppSettings
@@ -308,8 +307,8 @@ func handleSaveSettings(w http.ResponseWriter, r *http.Request) {
 		saveParam("mtproto_enabled", "0")
 	}
 
-	// اعمال داینامیک تنظیمات پروکسی تلگرام بدون نیاز به ری‌استارت پنل
-	applyMtprotoEngine(s)
+	// استارت یا استاپ کردن پراسس پروکسی در لحظه
+	go applyMtprotoEngine(s)
 
 	w.WriteHeader(http.StatusOK)
 }
@@ -318,49 +317,91 @@ func saveParam(key, value string) {
 	DB.Exec("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?", key, value, value)
 }
 
-// موتور مستقل MTProto در لایه TCP
+// دانلودر اختصاصی هسته MTG لینوکس
+func ensureMTGCore() error {
+	if _, err := os.Stat("mtg_core"); err == nil {
+		return nil // فایل از قبل وجود دارد
+	}
+	log.Println("MTProto Engine: Downloading core binary from GitHub...")
+	
+	resp, err := http.Get("https://github.com/9seconds/mtg/releases/download/v1.0.11/mtg-1.0.11-linux-amd64.tar.gz")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	gzr, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		return err
+	}
+	defer gzr.Close()
+
+	tr := tar.NewReader(gzr)
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		
+		if strings.HasSuffix(header.Name, "mtg") && !header.FileInfo().IsDir() {
+			f, err := os.OpenFile("mtg_core", os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0755)
+			if err != nil {
+				return err
+			}
+			_, err = io.Copy(f, tr)
+			f.Close()
+			if err != nil {
+				return err
+			}
+			log.Println("MTProto Engine: Core downloaded and installed successfully.")
+			return nil
+		}
+	}
+	return fmt.Errorf("executable not found in archive")
+}
+
+// مدیریت اجرای پراسس MTProto
 func applyMtprotoEngine(s AppSettings) {
 	mtprotoMutex.Lock()
 	defer mtprotoMutex.Unlock()
 
-	// بستن پورت قبلی در صورتی که باز باشد
-	if mtprotoListener != nil {
-		mtprotoListener.Close()
-		mtprotoListener = nil
-		log.Println("MTProto Engine: Stopped previous listener.")
+	// اگر پروکسی از قبل ران باشه، اون رو می‌کشه تا روی پورت جدید ران کنه
+	if mtprotoProcess != nil && mtprotoProcess.Process != nil {
+		mtprotoProcess.Process.Kill()
+		mtprotoProcess.Wait()
+		mtprotoProcess = nil
+		log.Println("MTProto Engine: Stopped previous instance.")
 	}
 
 	if !s.MtprotoEnabled || s.MtprotoPort == "" || s.MtprotoSecret == "" {
 		return
 	}
 
-	l, err := net.Listen("tcp", ":"+s.MtprotoPort)
+	err := ensureMTGCore()
 	if err != nil {
-		log.Printf("MTProto Engine: Failed to listen on port %s: %v", s.MtprotoPort, err)
+		log.Println("MTProto Engine Error: Could not setup core:", err)
 		return
 	}
 
-	mtprotoListener = l
-	log.Printf("MTProto Engine: Successfully started on port %s", s.MtprotoPort)
+	args := []string{"-b", "0.0.0.0:" + s.MtprotoPort}
+	// اگر سکرت تولید شده دارای dd هست، اون رو به هسته MTG پاس می‌دیم
+	args = append(args, s.MtprotoSecret)
 
-	// گوش دادن به کانکشن‌های ورودی تلگرام در یک گوروتین موازی
-	go func() {
-		for {
-			conn, err := l.Accept()
-			if err != nil {
-				break
-			}
-			go handleMtprotoConnection(conn)
-		}
-	}()
-}
+	cmd := exec.Command("./mtg_core", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 
-func handleMtprotoConnection(conn net.Conn) {
-	defer conn.Close()
-	// در این بخش پکت‌های خام MTProto مسیریابی می‌شوند.
-	// این تابع برای حفظ ارتباط زنده TCP آماده شده است تا هسته ثانویه (مانند mtg) ترافیک را مدیریت کند.
-	buf := make([]byte, 1024)
-	conn.Read(buf)
+	err = cmd.Start()
+	if err != nil {
+		log.Println("MTProto Engine Error: Failed to start:", err)
+		return
+	}
+	
+	mtprotoProcess = cmd
+	log.Println("MTProto Engine: Sub-process operational on port", s.MtprotoPort)
 }
 
 // --- مدیریت کاربران (API) ---
@@ -649,7 +690,6 @@ func handleSubscription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// لود کردن تنظیمات برای استخراج Global Clean IP
 	settings := loadSettingsFromDB()
 
 	rows, err := DB.Query("SELECT name, type, address, clean_ip FROM nodes WHERE status = 'active'")
@@ -668,7 +708,6 @@ func handleSubscription(w http.ResponseWriter, r *http.Request) {
 		safeAddr := cleanDomain(nAddr)
 		targetIP := safeAddr
 
-		// اولویت: آی‌پی تمیز نود -> آی‌پی تمیز گلوبال (تنظیمات)
 		if nCleanIP != "" {
 			targetIP = cleanDomain(nCleanIP)
 		} else if settings.DefaultCleanIp != "" {
