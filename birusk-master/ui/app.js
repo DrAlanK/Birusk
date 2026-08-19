@@ -1,5 +1,4 @@
 document.addEventListener('DOMContentLoaded', () => {
-    // --- متغیرهای سراسری سیستم ---
     const themeBtn = document.getElementById('theme-toggle');
     const html = document.documentElement;
     const contentArea = document.getElementById('content');
@@ -11,18 +10,16 @@ document.addEventListener('DOMContentLoaded', () => {
     let usersData = [];
     let nodesData = [];
     
-    // ذخیره تنظیمات در لوکال استوریج (شامل تنظیمات MTProto تلگرام)
     let coreSettings = JSON.parse(localStorage.getItem('birusk_settings')) || {
         subDomain: '',
         defaultCleanIp: '',
         enableStats: true,
         mtprotoEnabled: false,
-        mtprotoPort: '8443',
+        mtprotoPort: '8566',
         mtprotoSecret: '',
         mtprotoTag: ''
     };
 
-    // --- مدیریت تم (تاریک/روشن) ---
     let currentTheme = localStorage.getItem('theme') || 'dark';
     html.setAttribute('data-theme', currentTheme);
     
@@ -32,7 +29,6 @@ document.addEventListener('DOMContentLoaded', () => {
         html.setAttribute('data-theme', currentTheme);
     });
 
-    // --- مدیریت منوی موبایل ---
     const overlay = document.querySelector('.overlay') || document.createElement('div');
     if (!document.querySelector('.overlay')) {
         overlay.className = 'overlay';
@@ -53,7 +49,6 @@ document.addEventListener('DOMContentLoaded', () => {
     mobileBtn.addEventListener('click', toggleMenu);
     overlay.addEventListener('click', toggleMenu);
 
-    // --- سیستم چند زبانه ---
     let currentLang = localStorage.getItem('lang') || 'en';
     
     const applyLang = (lang) => {
@@ -79,7 +74,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if(activePage) renderContent(activePage);
     });
 
-    // --- توابع کمکی ---
     const formatBytes = (bytes) => {
         if (!bytes || bytes === 0) return '0 B';
         const k = 1024, sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -121,11 +115,9 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById(id).classList.remove('open');
     };
 
-    // --- ابزار تولید هوشمند Secret تلگرام (اصلاح شده برای ربات) ---
     window.generateMtprotoSecret = () => {
         const chars = '0123456789abcdef';
         let hex = '';
-        // تولید دقیقاً 32 کاراکتر هگزادسیمال برای ثبت در ربات تلگرام
         for (let i = 0; i < 32; i++) {
             hex += chars[Math.floor(Math.random() * chars.length)];
         }
@@ -134,14 +126,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (hintEl) hintEl.innerText = hex;
     };
 
-    window.updatePortHint = (val) => {
-        const hintEl = document.getElementById('hint-port');
-        let tgHost = coreSettings.subDomain || window.location.hostname;
-        tgHost = tgHost.replace(/^https?:\/\//, '').split('/')[0];
-        if (hintEl) hintEl.innerText = `${tgHost}:${val || '8443'}`;
-    };
-
-    // --- منطق پیشرفته کاربران (Wizards) ---
     window.openUserWizard = (id = null) => {
         if (id) {
             const u = usersData.find(x => x.id === id);
@@ -226,7 +210,6 @@ document.addEventListener('DOMContentLoaded', () => {
         renderContent('users');
     };
 
-    // --- منطق پیشرفته نودها ---
     window.openNodeWizard = (id = null) => {
         if (id) {
             const n = nodesData.find(x => x.id === id);
@@ -284,14 +267,13 @@ document.addEventListener('DOMContentLoaded', () => {
         renderContent('nodes');
     };
 
-    // --- تنظیمات هسته (Core Settings) ---
     window.saveSettings = () => {
         coreSettings.subDomain = document.getElementById('setting-domain').value;
         coreSettings.defaultCleanIp = document.getElementById('setting-cleanip').value;
         coreSettings.enableStats = document.getElementById('setting-stats').checked;
         
         coreSettings.mtprotoEnabled = document.getElementById('setting-mtproto-enable').checked;
-        coreSettings.mtprotoPort = document.getElementById('setting-mtproto-port').value;
+        coreSettings.mtprotoPort = document.getElementById('setting-mtproto-port').value; // همون 8566 داخل سرور
         coreSettings.mtprotoSecret = document.getElementById('setting-mtproto-secret').value;
         coreSettings.mtprotoTag = document.getElementById('setting-mtproto-tag').value;
         
@@ -301,7 +283,6 @@ document.addEventListener('DOMContentLoaded', () => {
         btn.innerText = 'Saved Successfully! ✔️';
         btn.style.background = 'var(--success)';
         
-        // فراخوانی API برای آپدیت تنظیمات در بک‌اند
         fetch('/api/settings', { 
             method: 'POST', 
             headers: { 'Content-Type': 'application/json' }, 
@@ -314,7 +295,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 2000);
     };
 
-    // --- موتور رندر صفحات (Rendering Engine) ---
     const renderContent = async (page) => {
         contentArea.innerHTML = '<div style="text-align:center; padding: 40px; color: var(--text-muted);">Fetching Live Data...</div>';
         
@@ -391,20 +371,21 @@ document.addEventListener('DOMContentLoaded', () => {
                                     
                                 const subLink = `${subBaseUrl}/sub?id=${u.id}`;
                                 
-                                // منطق ساخت لینک داینامیک تلگرام پروکسی
                                 let tgBtnHtml = '';
                                 if (coreSettings.mtprotoEnabled && coreSettings.mtprotoPort && coreSettings.mtprotoSecret) {
-                                    let tgServer = coreSettings.subDomain || window.location.hostname;
-                                    tgServer = tgServer.replace(/^https?:\/\//, '').split('/')[0];
+                                    // تولید لینک با سکرت FakeTLS برای کلاینت‌های تلگرام (ترکیب ee + سکرت + هگز google.com)
+                                    let baseSecret = coreSettings.mtprotoSecret;
+                                    let finalClientSecret = baseSecret;
                                     
-                                    let linkSecret = coreSettings.mtprotoSecret;
-                                    // اضافه کردن پیشوند dd فقط برای تولید لینک تلگرام کلاینت‌ها جهت امنیت بیشتر
-                                    if (linkSecret.length === 32) {
-                                        linkSecret = 'dd' + linkSecret;
+                                    if (baseSecret.length === 32) {
+                                        const fakeDomainHex = '676f6f676c652e636f6d'; // google.com in hex
+                                        finalClientSecret = 'ee' + baseSecret + fakeDomainHex;
                                     }
                                     
-                                    let tgLink = `tg://proxy?server=${tgServer}&port=${coreSettings.mtprotoPort}&secret=${linkSecret}`;
-                                    tgBtnHtml = `<button onclick="copyText('${tgLink}', 'Telegram Proxy Link Copied!')" class="btn-telegram" style="padding:8px 12px; font-size:0.85rem; border-radius:8px;">✈️ TG Proxy</button>`;
+                                    // اینجا حتما باید پورت ۵ رقمی ریلوی رو به جای پورت داخلی برای کاربر بذارید.
+                                    // اما چون پنل نمی‌تونه به صورت خودکار پورت بیرونی ریلوی رو بخونه، فعلا فقط پیام راهنما میده.
+                                    let tgServer = 'لطفاً از لینکی که ربات تلگرام به شما داده استفاده کنید!';
+                                    tgBtnHtml = `<button onclick="alert('${tgServer}')" class="btn-telegram" style="padding:8px 12px; font-size:0.85rem; border-radius:8px;">✈️ Info</button>`;
                                 }
 
                                 return `
@@ -491,30 +472,24 @@ document.addEventListener('DOMContentLoaded', () => {
             `;
         }
         else if (page === 'settings') {
-            let tgHost = coreSettings.subDomain || window.location.hostname;
-            tgHost = tgHost.replace(/^https?:\/\//, '').split('/')[0];
-
             htmlContent = `
                 <div style="max-width: 800px; margin: 0 auto;">
                     <div class="card">
                         <h3 style="margin-bottom: 24px; color: var(--primary); border-bottom: 1px solid var(--border); padding-bottom: 12px;">Global Core Settings</h3>
                         
                         <div class="form-group" style="margin-bottom: 20px;">
-                            <label style="font-weight:bold; margin-bottom:8px;">Subscription Link Domain / دامنه لینک‌های سابسکریپشن</label>
-                            <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:8px;">اگر پنل ریلوی شما فیلتر شده است، دامنه ورکر کلادفلر خود را در اینجا وارد کنید تا لینک‌های سابسکریپشن بر اساس این دامنه برای کاربران تولید شوند.</p>
+                            <label style="font-weight:bold; margin-bottom:8px;">Subscription Link Domain</label>
                             <input type="text" id="setting-domain" placeholder="e.g. sub.yourdomain.com" value="${coreSettings.subDomain || ''}">
                         </div>
 
                         <div class="form-group" style="margin-bottom: 20px;">
-                            <label style="font-weight:bold; margin-bottom:8px;">Global Clean IP / آی‌پی تمیز پیش‌فرض برای نودها</label>
-                            <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:8px;">اگر می‌خواهید کانفیگ‌ها به صورت خودکار با یک آی‌پی تمیز (Clean IP) ساخته شوند، آن را اینجا وارد کنید.</p>
+                            <label style="font-weight:bold; margin-bottom:8px;">Global Clean IP</label>
                             <input type="text" id="setting-cleanip" placeholder="e.g. 104.17.142.23" value="${coreSettings.defaultCleanIp || ''}">
                         </div>
 
                         <div class="switch-group" style="margin-bottom: 10px;">
                             <div>
                                 <div style="font-weight: 600;">Live Statistics Engine</div>
-                                <div style="font-size: 0.8rem; color: var(--text-muted);">Enable real-time dashboard analytics and traffic visualization</div>
                             </div>
                             <label class="switch">
                                 <input type="checkbox" id="setting-stats" ${coreSettings.enableStats ? 'checked' : ''}>
@@ -522,13 +497,11 @@ document.addEventListener('DOMContentLoaded', () => {
                             </label>
                         </div>
                         
-                        <!-- پنل اختصاصی MTProto اسپانسری تلگرام -->
                         <h3 style="margin-top: 32px; margin-bottom: 16px; color: var(--telegram); border-bottom: 1px solid var(--border); padding-bottom: 12px;">Telegram MTProto Proxy</h3>
                         
                         <div class="switch-group" style="margin-bottom: 20px;">
                             <div>
                                 <div style="font-weight: 600;">Enable Telegram Proxy</div>
-                                <div style="font-size: 0.8rem; color: var(--text-muted);">Activate MTProto engine with Sponsor Channel</div>
                             </div>
                             <label class="switch">
                                 <input type="checkbox" id="setting-mtproto-enable" ${coreSettings.mtprotoEnabled ? 'checked' : ''}>
@@ -538,8 +511,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         
                         <div class="form-row" style="margin-bottom: 20px;">
                             <div class="form-group">
-                                <label style="font-weight:bold; margin-bottom:8px;">Proxy Port</label>
-                                <input type="number" id="setting-mtproto-port" placeholder="e.g. 8443" value="${coreSettings.mtprotoPort || '8443'}" onkeyup="updatePortHint(this.value)">
+                                <label style="font-weight:bold; margin-bottom:8px;">Internal Proxy Port</label>
+                                <input type="number" id="setting-mtproto-port" placeholder="e.g. 8566" value="${coreSettings.mtprotoPort || '8566'}">
                             </div>
                             <div class="form-group">
                                 <label style="font-weight:bold; margin-bottom:8px;">Sponsor Tag (from Bot)</label>
@@ -548,19 +521,17 @@ document.addEventListener('DOMContentLoaded', () => {
                         </div>
                         
                         <div class="form-group" style="margin-bottom: 20px;">
-                            <label style="font-weight:bold; margin-bottom:8px;">MTProto Secret (Exactly 32 Hex Chars)</label>
+                            <label style="font-weight:bold; margin-bottom:8px;">MTProto Base Secret (Exactly 32 Hex Chars)</label>
                             <div style="display:flex; gap:12px;">
                                 <input type="text" id="setting-mtproto-secret" placeholder="Click Auto Generate..." value="${coreSettings.mtprotoSecret || ''}" style="flex:1;">
                                 <button onclick="generateMtprotoSecret()" class="btn-secondary" style="color:var(--telegram); border-color:var(--telegram); white-space:nowrap;">🔄 Auto Generate</button>
                             </div>
                         </div>
 
-                        <!-- راهنمای ثبت در ربات تلگرام -->
                         <div style="background: rgba(46, 170, 220, 0.05); border: 1px dashed var(--telegram); padding: 16px; border-radius: 12px; margin-bottom: 30px;">
                             <h4 style="color: var(--telegram); margin-bottom: 12px; display:flex; align-items:center; gap:8px;">🤖 @TelegramProxyBot Registration Info</h4>
-                            <p style="font-size:0.9rem; margin-bottom: 12px; color:var(--text-main);">To register your proxy and get a Sponsor Tag, copy and send these exact details to the bot:</p>
+                            <p style="font-size:0.9rem; margin-bottom: 12px; color:var(--text-main);">For the bot, use your Railway TCP Address and the Secret below.</p>
                             <ul style="list-style:none; font-family:monospace; color:var(--text-muted); font-size:0.95rem; line-height:1.8; background:var(--bg-base); padding:12px; border-radius:8px; border:1px solid var(--border);">
-                                <li><strong style="color:var(--text-main); display:inline-block; width:80px;">Host:Port </strong> <span id="hint-port">${tgHost}:${coreSettings.mtprotoPort || '8443'}</span></li>
                                 <li><strong style="color:var(--text-main); display:inline-block; width:80px;">Secret </strong> <span id="hint-secret">${coreSettings.mtprotoSecret || '(Click Auto Generate First)'}</span></li>
                             </ul>
                         </div>
@@ -575,7 +546,6 @@ document.addEventListener('DOMContentLoaded', () => {
         applyLang(currentLang);
     };
 
-    // --- مدیریت نویگیشن ---
     const navItems = document.querySelectorAll('.nav-item');
     navItems.forEach(item => {
         item.addEventListener('click', (e) => {
@@ -598,7 +568,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    // شروع رندر شدن داشبورد
     applyLang(currentLang);
     renderContent('dashboard');
 });

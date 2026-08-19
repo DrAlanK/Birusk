@@ -99,7 +99,6 @@ func main() {
 
 	InitDB("birusk.db")
 
-	// استارت کردن پروکسی تلگرام در بک‌گراند (در صورت فعال بودن در دیتابیس)
 	initialSettings := loadSettingsFromDB()
 	go applyMtprotoEngine(initialSettings)
 
@@ -307,7 +306,6 @@ func handleSaveSettings(w http.ResponseWriter, r *http.Request) {
 		saveParam("mtproto_enabled", "0")
 	}
 
-	// استارت یا استاپ کردن پراسس پروکسی در لحظه
 	go applyMtprotoEngine(s)
 
 	w.WriteHeader(http.StatusOK)
@@ -317,10 +315,9 @@ func saveParam(key, value string) {
 	DB.Exec("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?", key, value, value)
 }
 
-// دانلودر اختصاصی هسته MTG لینوکس
 func ensureMTGCore() error {
 	if _, err := os.Stat("mtg_core"); err == nil {
-		return nil // فایل از قبل وجود دارد
+		return nil
 	}
 	log.Println("MTProto Engine: Downloading core binary from GitHub...")
 	
@@ -363,12 +360,10 @@ func ensureMTGCore() error {
 	return fmt.Errorf("executable not found in archive")
 }
 
-// مدیریت اجرای پراسس MTProto
 func applyMtprotoEngine(s AppSettings) {
 	mtprotoMutex.Lock()
 	defer mtprotoMutex.Unlock()
 
-	// اگر پروکسی از قبل ران باشه، اون رو می‌کشه تا روی پورت جدید ران کنه
 	if mtprotoProcess != nil && mtprotoProcess.Process != nil {
 		mtprotoProcess.Process.Kill()
 		mtprotoProcess.Wait()
@@ -386,9 +381,16 @@ func applyMtprotoEngine(s AppSettings) {
 		return
 	}
 
-	args := []string{"-b", "0.0.0.0:" + s.MtprotoPort}
-	// اگر سکرت تولید شده دارای dd هست، اون رو به هسته MTG پاس می‌دیم
-	args = append(args, s.MtprotoSecret)
+	// اضافه شدن کلمه‌ی حیاتی "run" برای استارت شدن انجین
+	args := []string{"run", "-b", "0.0.0.0:" + s.MtprotoPort}
+	
+	// تبدیل خودکار سکرت ۳۲ حرفی به FakeTLS (جلوگیری از فیلترینگ با سایت google.com)
+	secretToPass := s.MtprotoSecret
+	if len(secretToPass) == 32 {
+		fakeDomainHex := hex.EncodeToString([]byte("google.com"))
+		secretToPass = "ee" + secretToPass + fakeDomainHex
+	}
+	args = append(args, secretToPass)
 
 	cmd := exec.Command("./mtg_core", args...)
 	cmd.Stdout = os.Stdout
@@ -401,7 +403,7 @@ func applyMtprotoEngine(s AppSettings) {
 	}
 	
 	mtprotoProcess = cmd
-	log.Println("MTProto Engine: Sub-process operational on port", s.MtprotoPort)
+	log.Println("MTProto Engine: Sub-process operational on port", s.MtprotoPort, "with FakeTLS enabled.")
 }
 
 // --- مدیریت کاربران (API) ---
